@@ -1,0 +1,196 @@
+---
+name: Release
+
+# crystalreleaser releases itself, split over three runners (see
+# docs/github-actions.md): each builds its share of .crystalreleaser.yml with
+# `build --split`, then one job merges and publishes. The tool is compiled
+# from the tagged sources on every runner (`mise dev:build`), so a release
+# never depends on a previous one.
+
+# Every job starts with no permission; only the publishing job opts in.
+permissions: {}
+
+# crystalline is the Crystal LSP server, only needed in an editor; its macOS
+# binary fails the mise post_install check on the runners. The value must be
+# the tool name exactly as declared in mise.toml.
+env:
+  MISE_DISABLE_TOOLS: aqua:elbywan/crystalline
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# A tag pushed again while its release is still running must wait: two runs
+# would delete and upload the assets of the same release at the same time.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A tag can be put on any commit, including one whose CI is red: nothing is
+  # built, let alone published, before the suite passes on the tagged sources.
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+
+      - name: Install dependencies
+        run: mise dev:deps
+
+      - name: Run tests
+        run: mise dev:spec
+
+      - name: Run tests (multi-threaded)
+        run: mise dev:spec-mt
+
+  linux:
+    needs: test
+    runs-on: ubuntu-24.04
+    # linux/arm64 compiles under QEMU emulation, which is slow but not endless.
+    timeout-minutes: 90
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          # Tags and history: the version and the changelog come from git.
+          fetch-depth: 0
+
+      # linux/arm64 is built in docker under QEMU emulation.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      # As in the build_static_binaries job of ci.yml, which rehearses this
+      # one: the emulation check reads `docker buildx ls`.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+
+      - name: Build crystalreleaser
+        run: mise dev:build
+
+      - name: Build the linux binaries
+        run: bin/crystalreleaser build --split --clean
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-linux
+          path: dist/
+
+  darwin_arm64:
+    needs: test
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+
+      # TODO: remove me when https://github.com/crystal-lang/crystal/issues/16746 is fixed
+      - name: Fix Crystal shards
+        run: mise dev:fix-shards-command
+
+      - name: Build crystalreleaser
+        run: mise dev:build
+
+      - name: Build the darwin/arm64 binary
+        run: bin/crystalreleaser build --split --clean
+
+      # A binary linked against the runner's Homebrew OpenSSL only starts on a
+      # Mac that has it at the same path.
+      - name: Check that the binary only needs system libraries
+        run: scripts/check-darwin-linkage.sh dist/darwin_arm64/crystalreleaser_darwin_arm64/crystalreleaser
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-darwin-arm64
+          path: dist/
+
+  darwin_amd64:
+    needs: test
+    runs-on: macos-26-intel
+    timeout-minutes: 45
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+
+      # TODO: remove me when https://github.com/crystal-lang/crystal/issues/16746 is fixed
+      - name: Fix Crystal shards
+        run: mise dev:fix-shards-command
+
+      - name: Build crystalreleaser
+        run: mise dev:build
+
+      - name: Build the darwin/amd64 binary
+        run: bin/crystalreleaser build --split --clean
+
+      # A binary linked against the runner's Homebrew OpenSSL only starts on a
+      # Mac that has it at the same path.
+      - name: Check that the binary only needs system libraries
+        run: scripts/check-darwin-linkage.sh dist/darwin_amd64/crystalreleaser_darwin_amd64/crystalreleaser
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-darwin-amd64
+          path: dist/
+
+  release:
+    needs: [linux, darwin_arm64, darwin_amd64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      # Create the release and upload its assets.
+      contents: write
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+
+      - name: Build crystalreleaser
+        run: mise dev:build
+
+      # Each runner's dist/<os>_<arch>/ lands side by side in dist/.
+      - name: Download the split builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Merge and publish
+        run: bin/crystalreleaser release --merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The tap and the registry are other repositories: the workflow token
+          # cannot write to them.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          AQUA_REGISTRY_TOKEN: ${{ secrets.AQUA_REGISTRY_TOKEN }}

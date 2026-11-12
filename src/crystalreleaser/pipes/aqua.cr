@@ -1,0 +1,183 @@
+require "yaml"
+
+require "../artifact"
+require "../context"
+require "../pipe"
+require "./homebrew"
+
+module Crystalreleaser
+  module Pipes
+    # An aqua registry.yaml per `aqua:` entry. The `{{...}}` it contains are
+    # aqua's own templates, so the file is built with YAML::Builder and never
+    # goes through crystalreleaser's template engine. The asset template and
+    # the supported environments are derived from the archives actually
+    # produced. Written to dist/aqua/ before the release is published, with
+    # no request: AquaPush pushes it to the registry afterwards.
+    class Aqua < Pipe
+      def name : String
+        "aqua"
+      end
+
+      def description : String
+        "generating the aqua registry entry"
+      end
+
+      def skip?(ctx : Context) : String?
+        "no aqua configured" if ctx.config.aqua.empty?
+      end
+
+      def run(ctx : Context) : Nil
+        ctx.config.aqua.each_with_index do |aqua, index|
+          registry = registry(ctx, aqua)
+          path = Aqua.local_path(ctx, index)
+          Dir.mkdir_p(File.dirname(path))
+          File.write(path, registry)
+          ctx.artifacts.add(Artifact.new(Artifact::Type::AquaRegistry, File.basename(path), ctx.relative(path)))
+          ctx.logger.info(ctx.relative(path))
+        end
+      end
+
+      # Where the entry of the `index`-th `aqua:` item is written in dist/.
+      def self.local_path(ctx : Context, index : Int32) : String
+        ctx.dist_path("aqua", index > 0 ? "registry-#{index}.yaml" : "registry.yaml")
+      end
+
+      def registry(ctx : Context, aqua : Config::Aqua) : String
+        archives = ctx.artifacts.filter(type: Artifact::Type::Archive).select { |artifact| artifact.extra["format"]? == "tar.gz" }
+        raise PackageError.new("aqua: no tar.gz archive to point to") if archives.empty?
+        version = ctx.version_info.version
+        templates = archives.map { |archive| aqua_template(archive.name, version, archive.os, archive.arch) }.uniq!
+        unless templates.size == 1
+          raise PackageError.new("aqua: the archive names do not follow one template: #{templates.join(", ")}")
+        end
+        first = archives.first
+        wrap = first.extra["wrap"]?.presence.try { |dir| aqua_template(dir, version, first.os, first.arch) }
+        binaries = (first.extra["binaries"]? || "").split(',').reject(&.empty?)
+        checksum = ctx.artifacts.filter(type: Artifact::Type::Checksum).first?
+        owner, repo = repository(ctx)
+
+        YAML.build do |yaml|
+          yaml.mapping do
+            yaml.scalar "packages"
+            yaml.sequence do
+              yaml.mapping do
+                pair(yaml, "type", "github_release")
+                pair(yaml, "repo_owner", owner)
+                pair(yaml, "repo_name", repo)
+                pair(yaml, "description", aqua.description) unless aqua.description.empty?
+                # A string: aqua evaluates it as an expression.
+                yaml.scalar "version_constraint"
+                yaml.scalar "true", style: YAML::ScalarStyle::DOUBLE_QUOTED
+                pair(yaml, "asset", templates.first)
+                pair(yaml, "format", "tar.gz")
+                yaml.scalar "files"
+                yaml.sequence do
+                  binaries.each do |binary|
+                    yaml.mapping do
+                      pair(yaml, "name", binary)
+                      pair(yaml, "src", "#{wrap}/#{binary}") if wrap
+                    end
+                  end
+                end
+                yaml.scalar "supported_envs"
+                yaml.sequence { supported_envs(archives).each { |env| yaml.scalar env } }
+                if checksum
+                  yaml.scalar "checksum"
+                  yaml.mapping do
+                    pair(yaml, "type", "github_release")
+                    # Split checksums: one file per asset, named after it.
+                    asset = ctx.config.checksum.split? ? "{{.Asset}}#{Checksum::SPLIT_SUFFIX}" : aqua_template(checksum.name, version, nil, nil)
+                    pair(yaml, "asset", asset)
+                    pair(yaml, "algorithm", "sha256")
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+
+      # What YAML 1.1, which the readers of a registry still follow, takes
+      # for a boolean or for nothing when written bare.
+      RESERVED = /\A(y|n|yes|no|on|off|true|false|null|~)\z/i
+
+      # Every value is text: one that would be read back as a boolean, a
+      # number or nothing is quoted.
+      private def pair(yaml : YAML::Builder, key : String, value : String) : Nil
+        yaml.scalar key
+        plain = YAML::Schema::Core.parse_scalar(value).is_a?(String) && !value.matches?(RESERVED)
+        yaml.scalar value, style: plain ? YAML::ScalarStyle::ANY : YAML::ScalarStyle::DOUBLE_QUOTED
+      end
+
+      # An archive name with the version, os and arch replaced by aqua's
+      # template expressions. For the os and the arch: whole words only (so
+      # "toy-amd64ish" is safe), and the last occurrence only, which is the
+      # one the name template wrote; a project called "linux-tool" keeps its
+      # name on every platform.
+      private def aqua_template(name : String, version : String, os : String?, arch : String?) : String
+        result = name.gsub(version, "{{trimV .Version}}")
+        result = replace_last_word(result, os, "{{.OS}}") if os
+        result = replace_last_word(result, arch, "{{.Arch}}") if arch
+        result
+      end
+
+      private def replace_last_word(text : String, word : String, replacement : String) : String
+        last = nil
+        text.scan(/(?<![A-Za-z0-9])#{Regex.escape(word)}(?![A-Za-z0-9])/) { |match| last = match }
+        found = last
+        return text unless found
+        text[0, found.begin(0)] + replacement + text[found.end(0)..]
+      end
+
+      # "linux" when both architectures are there, "linux/amd64" otherwise.
+      private def supported_envs(archives : Array(Artifact)) : Array(String)
+        by_os = archives.group_by(&.os.to_s)
+        by_os.keys.sort!.flat_map do |system|
+          arches = by_os[system].compact_map(&.arch).uniq!.sort!
+          arches == ["amd64", "arm64"] ? [system] : arches.map { |arch| "#{system}/#{arch}" }
+        end
+      end
+
+      private def repository(ctx : Context) : {String, String}
+        ctx.release_repo
+      rescue error : ConfigError
+        raise error if Homebrew.publishing?(ctx)
+        {"OWNER", "REPO"}
+      end
+    end
+
+    # Pushes the entries the aqua pipe wrote to their registry, once the
+    # release they point at is published. Same name as that pipe, so that
+    # --skip=aqua covers both.
+    class AquaPush < PublishPipe
+      def name : String
+        "aqua"
+      end
+
+      def description : String
+        "pushing the aqua registry entry"
+      end
+
+      def skip?(ctx : Context) : String?
+        return "no aqua configured" if ctx.config.aqua.empty?
+        Homebrew.push_skipped?(ctx, "the registry entry")
+      end
+
+      def run(ctx : Context) : Nil
+        ctx.config.aqua.each_with_index do |aqua, index|
+          next unless Homebrew.pushing?(ctx, aqua.path, aqua.skip_upload)
+          push(ctx, aqua, index, File.read(Aqua.local_path(ctx, index)))
+        end
+      end
+
+      private def push(ctx : Context, aqua : Config::Aqua, index : Int32, registry : String) : Nil
+        repository = aqua.repository
+        client = ctx.repository_client(repository, "aqua[#{index}].repository")
+        sha = client.file_sha(repository.owner, repository.name, aqua.path, repository.branch)
+        client.put_file(repository.owner, repository.name, aqua.path, repository.branch, registry,
+          "Aqua registry update for #{ctx.config.project_name} version #{ctx.version_info.tag}", sha)
+        ctx.logger.info("pushed #{aqua.path}", repo: "#{repository.owner}/#{repository.name}")
+      end
+    end
+  end
+end

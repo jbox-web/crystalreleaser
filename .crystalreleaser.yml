@@ -1,0 +1,123 @@
+# crystalreleaser releases itself (dogfooding). Used by:
+#   - `mise release:static` (CI, every push): build --split --snapshot, then
+#     release --merge --snapshot --skip=publish
+#   - .github/workflows/release.yml (tag v*): build --split on three runners,
+#     then release --merge
+version: 1
+project_name: crystalreleaser
+
+builds:
+  - id: crystalreleaser
+    target: crystalreleaser
+    # Single-threaded on purpose: the parallel builds are child processes,
+    # which fibers on one thread wait for just as well (measured: 6 builds in
+    # 12.0 s either way), and -Dpreview_mt only brought its own failures.
+    flags: [--release, --no-debug]
+    env:
+      # Read by src/crystalreleaser/version.cr at compile time.
+      - CRYSTALRELEASER_VERSION={{ .Version }}
+      # static-libs/ holds the static OpenSSL on macOS, so that the darwin
+      # binaries do not depend on a Homebrew library (scripts/static-libs.sh).
+      # Through CRYSTAL_OPTS and not `flags:`, because the path must be
+      # absolute: the linker runs in the compiler cache, not in the project.
+      # In the docker builds the folder does not exist, which the linker
+      # ignores.
+      - CRYSTAL_OPTS=--link-flags=-L{{ .Env.PWD }}/static-libs
+    platforms:
+      - os: linux
+        arch: amd64
+        strategy: docker
+        static: true
+      - os: linux
+        arch: arm64
+        strategy: docker
+        static: true
+      - os: darwin
+        arch: arm64
+        strategy: native
+      - os: darwin
+        arch: amd64
+        strategy: native
+    docker:
+      # The compiler version pinned in mise.toml, whatever the host has.
+      image: 84codes/crystal:1.20.3-alpine
+
+# The binary embeds its third-party notices (licenses/), which must be
+# assembled before compiling, and links the libraries of static-libs/. Before
+# hooks run on every runner of a split build, and not during the merge.
+before:
+  hooks:
+    - bash scripts/harvest-licenses.sh
+    - bash scripts/static-libs.sh
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:", "Merge pull request"]
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+    - title: Bug fixes
+      regexp: '^fix(\(.+\))?!?:'
+    - title: Others
+
+release:
+  github:
+    owner: jbox-web
+    name: crystalreleaser
+  prerelease: auto
+  replace_existing_artifacts: true
+
+nfpms:
+  - id: packages
+    package_name: crystalreleaser
+    formats: [deb, rpm]
+    vendor: jbox-web
+    homepage: https://github.com/jbox-web/crystalreleaser
+    maintainer: Nicolas Rodriguez <nico@nicoladmin.fr>
+    description: |
+      Release automation for Crystal projects
+      Builds, archives, checksums and publishes Crystal binaries, and
+      produces .deb/.rpm packages, a Homebrew formula and an aqua entry.
+    license: MIT
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/crystalreleaser/LICENSE
+
+brews:
+  - name: crystalreleaser
+    repository:
+      owner: jbox-web
+      name: homebrew-tap
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/jbox-web/crystalreleaser
+    description: Release automation for Crystal projects
+    license: MIT
+    install: |
+      bin.install "crystalreleaser"
+    test: |
+      system "#{bin}/crystalreleaser", "--version"
+
+aqua:
+  - repository:
+      owner: jbox-web
+      name: aqua-registry
+      branch: master
+      token: "{{ .Env.AQUA_REGISTRY_TOKEN }}"
+    path: pkgs/jbox-web/crystalreleaser/registry.yaml
+    description: Release automation for Crystal projects

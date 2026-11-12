@@ -1,0 +1,21 @@
+# Ignore generated data
+/docs/api/
+/lib/
+/dist/
+
+# kcov report and spec binary written by `mise dev:coverage`.
+/coverage/
+
+# Assembled by scripts/harvest-licenses.sh from licenses.manifest,
+# licenses-spdx/ and licenses-upstream/, all of which are tracked.
+/licenses/
+
+# Assembled by scripts/static-libs.sh for the release builds.
+/static-libs/
+
+# Ignore all bin files
+/bin/*
+!/bin/.keep
+
+# Ignore MacOS files
+.DS_Store

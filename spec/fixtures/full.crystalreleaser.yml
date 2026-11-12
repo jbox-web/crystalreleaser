@@ -1,0 +1,129 @@
+# Every documented key, as written in the specification. Used to prove the
+# whole schema parses and keeps its values.
+version: 1
+project_name: ssherlock
+dist: dist
+
+env:
+  - CGO_LIKE=unused
+
+before:
+  hooks:
+    - shards install --production
+    - crystal spec
+
+builds:
+  - id: ssherlock
+    target: ssherlock
+    binary: ssherlock
+    flags: [--release, --no-debug]
+    env:
+      - SSHERLOCK_VERSION={{ .Version }}
+      - SSHERLOCK_COMMIT={{ .ShortCommit }}
+    platforms:
+      - os: linux
+        arch: amd64
+        strategy: docker
+        static: true
+      - os: linux
+        arch: arm64
+        strategy: docker
+        static: true
+      - os: darwin
+        arch: arm64
+        strategy: native
+    docker:
+      image: 84codes/crystal:{{ .CrystalVersion }}-alpine
+      platform_flag: true
+      shards_install: true
+    cross:
+      linker: zig
+      sysroot: /opt/sysroots/{{ .Os }}-{{ .Arch }}
+      link_flags: []
+
+archives:
+  - id: default
+    builds: [ssherlock]
+    formats: [tar.gz]
+    format_overrides:
+      - os: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: false
+    files:
+      - LICENSE
+      - README.md
+      - src: completions/*
+        dst: completions
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  split: false
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:", "Merge pull request"]
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+    - title: Bug fixes
+      regexp: '^fix(\(.+\))?!?:'
+    - title: Others
+
+release:
+  github:
+    owner: jbox-web
+    name: ssherlock
+  draft: false
+  prerelease: auto
+  replace_existing_artifacts: true
+  make_latest: legacy
+  name_template: "v{{ .Version }}"
+  header: ""
+  footer: ""
+
+nfpms:
+  - id: packages
+    builds: [ssherlock]
+    package_name: ssherlock
+    formats: [deb, rpm]
+    vendor: jbox-web
+    homepage: https://github.com/jbox-web/ssherlock
+    maintainer: Nicolas Rodriguez <nico@example.com>
+    description: SSH audit collector
+    license: MIT
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/ssherlock/LICENSE
+    dependencies: []
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+
+brews:
+  - name: ssherlock
+    repository:
+      owner: jbox-web
+      name: homebrew-tap
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/jbox-web/ssherlock
+    description: SSH audit collector
+    license: MIT
+    skip_upload: auto
+    install: |
+      bin.install "ssherlock"
+    test: |
+      system "#{bin}/ssherlock", "--version"
+
+aqua:
+  - repository:
+      owner: jbox-web
+      name: aqua-registry
+      branch: main
+      token: "{{ .Env.AQUA_REGISTRY_TOKEN }}"
+    path: pkgs/jbox-web/ssherlock/registry.yaml
+    description: SSH audit collector

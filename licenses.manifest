@@ -1,0 +1,39 @@
+# kind | name | source (on-disk LICENSE path for shards; for clib/runtime, an
+# SPDX id of licenses-spdx/, or the path of the library's own license file)
+#
+# Only what the released binary actually embeds. crystalreleaser has no runtime
+# shard at all (stdlib only), and ameba is a development dependency that never
+# ends up in it.
+#
+# The clib list follows the stdlib modules the tool requires:
+#   Regex                      -> pcre2
+#   YAML                       -> libyaml
+#   Compress::Gzip/Zip         -> zlib
+#   HTTP::Client over TLS      -> openssl (libssl + libcrypto)
+#   GC, static libc, runtime   -> boehm-gc, musl, libgcc
+# CONFIRMED on 2026-11-17 against the link line of this very binary, captured
+# with `crystal build --static --verbose` in 84codes/crystal:1.20.3-alpine
+# (the same libraries as on 2026-11-12, when it was built with -Dpreview_mt):
+#   -lssl -lcrypto -lgc -lpcre2-8 -lpthread -lyaml -lz  (+ musl, libgcc)
+# No gmp, no libevent. Licenses as apk records them in that image: openssl
+# 3.5.7 Apache-2.0, pcre2 10.47 BSD-3-Clause, yaml 0.2.5 MIT, zlib 1.3.2 Zlib,
+# musl 1.2.6 MIT. Re-run the check when a stdlib module is added or the
+# image moves.
+#
+# MIT, BSD-3-Clause and zlib require the copyright notice to be reproduced,
+# and their SPDX text only has a blank there: those four libraries embed their
+# own license file, taken on 2026-11-12 from their sources at the versions
+# above (to be taken again when a version moves):
+#   pcre2    LICENCE.md  github.com/PCRE2Project/pcre2  tag pcre2-10.47
+#   libyaml  License     github.com/yaml/libyaml        tag 0.2.5
+#   zlib     LICENSE     github.com/madler/zlib         tag v1.3.2
+#   musl     COPYRIGHT   git.musl-libc.org/cgit/musl    tag v1.2.6
+clib    | openssl         | Apache-2.0
+clib    | pcre2           | licenses-upstream/pcre2.txt
+clib    | libyaml         | licenses-upstream/libyaml.txt
+clib    | zlib            | licenses-upstream/zlib.txt
+clib    | boehm-gc        | Boehm-GC
+clib    | musl            | licenses-upstream/musl.txt
+clib    | libgcc          | GCC-runtime-exception
+runtime | crystal         | Apache-2.0
+project | crystalreleaser | LICENSE
