@@ -319,6 +319,32 @@ describe Crystalreleaser::Validator do
     end
   end
 
+  describe "static_libs" do
+    darwin = "      - os: darwin\n        arch: arm64\n"
+
+    it "accepts a formula and its libraries on a build with a native darwin platform" do
+      errors(build_with(darwin, "    static_libs:\n      formula: openssl@4\n      libs: [ssl, crypto]\n"), DARWIN_HOST).should be_empty
+    end
+
+    it "warns that nothing uses it when the build has no native darwin platform" do
+      warnings(build_with("      - os: linux\n        arch: amd64\n        strategy: docker\n        static: true\n",
+        "    static_libs:\n      formula: openssl@4\n      libs: [ssl]\n")).should eq([
+        "builds[0].static_libs: only native darwin builds use it, and this build has none",
+      ])
+    end
+
+    it "rejects an empty formula or library list, and file names instead of library names" do
+      errors(build_with(darwin, "    static_libs:\n      formula: \"\"\n      libs: []\n"), DARWIN_HOST).should eq([
+        %(builds[0].static_libs.formula: "" is not a Homebrew formula name),
+        "builds[0].static_libs.libs: at least one library is required",
+      ])
+      errors(build_with(darwin, "    static_libs:\n      formula: openssl@4\n      libs: [libssl, crypto.a]\n"), DARWIN_HOST).should eq([
+        %(builds[0].static_libs.libs[0]: "libssl" is a file name: write the library name, as for -l (ssl for libssl.a)),
+        %(builds[0].static_libs.libs[1]: "crypto.a" is a file name: write the library name, as for -l (ssl for libssl.a)),
+      ])
+    end
+  end
+
   describe "ids and references" do
     it "rejects duplicate build ids" do
       errors("builds:\n  - id: toy\n    target: toy\n  - id: toy\n    target: toy\n")

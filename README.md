@@ -98,7 +98,7 @@ appear on its command line.
 
 | Strategy | What runs | Platforms | Limits |
 |---|---|---|---|
-| `native` | `crystal build` on the host | the host's own os/arch | Skipped (with a warning) on any other host. `static: true` needs a musl host (Alpine): glibc cannot be linked statically, and macOS has no static linking at all. |
+| `native` | `crystal build` on the host | the host's own os/arch | Skipped (with a warning) on any other host. `static: true` needs a musl host (Alpine): glibc cannot be linked statically, and macOS has no static linking at all. On darwin, `static_libs` links the libraries of a Homebrew formula statically, and the build fails when the binary still depends on a library macOS does not ship (see below). |
 | `docker` | `crystal build` in a Crystal image, with `--static` when the platform says `static: true`: by default an image built on Alpine with Alpine's own Crystal (see below), or the project's Dockerfile, or a given image | linux/amd64, linux/arm64 | In an Alpine image, set `static: true`: a dynamic musl binary runs on no glibc distribution (`check` warns about it). Needs docker; the other architecture runs under QEMU and needs binfmt (`docker run --privileged --rm tonistiigi/binfmt --install arm64`). Emulated builds run one at a time. |
 | `cross` | `crystal build --cross-compile`, then `zig cc` against a sysroot (or, with `linker: cc`, `cc --target` when `cc` is clang and `<triple>-gcc` when it is gcc) | any target with a sysroot | The sysroot must hold the target's static libraries (libgc, pcre2, libyaml, openssl...). crystalreleaser does not provide it; it fails if it is missing. |
 
@@ -116,6 +116,27 @@ With zig, the sysroot is passed as `-L` folders only (zig would prefix even
 absolute paths with `--sysroot`), and `-lunwind` is added for linux targets:
 `zig cc` does not link the `libgcc_eh` gcc brings implicitly, which Crystal's
 exceptions need.
+
+A darwin binary may only depend on the libraries every Mac has, under
+`/usr/lib` and `/System/Library`: after each darwin build, `otool -L` lists
+what the binary loads, and anything else fails the build with the list of
+the offending libraries. Homebrew's OpenSSL is the usual one: Crystal finds
+it through pkg-config and links its `.dylib`, so the binary only starts on a
+Mac that has the very same OpenSSL at the very same path, and two runners
+may well not even have the same major version.
+
+`static_libs`, on a build, links the listed libraries of one Homebrew
+formula statically on the native darwin platforms: their `lib<name>.a` are
+copied from `$(brew --prefix <formula>)/lib` into a folder of their own,
+outside the project, passed first to the linker with an absolute `-L`
+(the macOS linker takes the first folder that holds a library, and has no
+"static for this one only" switch). The build stops before compiling when
+the formula or one of the archives is missing, naming the formula to
+install; there is no fallback to another formula, so that arm64 and amd64
+embed the same library. It is a build setting, not a platform one, for that
+same reason; on the other platforms it does nothing (the linux builds are
+static already), and `check` warns when the build has no native darwin
+platform at all.
 
 The docker strategy runs as the calling user (dist/ is not left to root),
 mounts the project at `/src`, and keeps the compiler cache and `lib/` in
@@ -243,6 +264,9 @@ builds:
       linker: zig                   # zig | cc
       sysroot: /opt/sysroots/{{ .Os }}-{{ .Arch }}
       link_flags: []
+    static_libs:                    # native darwin builds: see below
+      formula: openssl@4            # the Homebrew formula, on every Mac that builds
+      libs: [ssl, crypto]           # names as for -l: libssl.a, libcrypto.a
 
 archives:
   - id: default

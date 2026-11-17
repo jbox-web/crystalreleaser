@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `static_libs` on a build: the native darwin builds link the listed
+  libraries of a Homebrew formula statically (`formula: openssl@4`,
+  `libs: [ssl, crypto]`), and stop before compiling when the formula or an
+  archive is missing.
+- Every darwin build checks the libraries its binary loads with `otool -L`
+  and fails when one is outside `/usr/lib` and `/System/Library`.
+
+### Changed
+
+- crystalreleaser's own darwin binaries link OpenSSL 4 through
+  `static_libs`; `scripts/static-libs.sh` and `scripts/check-darwin-linkage.sh`
+  are gone.
+
 ## [0.1.0] - 2026-11-17
 
 ### Added

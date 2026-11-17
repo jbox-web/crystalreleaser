@@ -109,13 +109,15 @@ jobs:
       - name: Build crystalreleaser
         run: mise dev:build
 
+      # The OpenSSL static_libs links (see .crystalreleaser.yml): the same
+      # formula on both architectures, whatever the runner has by default.
+      - name: Install OpenSSL 4
+        run: brew install openssl@4
+
+      # Fails when the binary depends on a library macOS does not ship
+      # (otool -L): the check runs in the build itself.
       - name: Build the darwin/arm64 binary
         run: bin/crystalreleaser build --split --clean
-
-      # A binary linked against the runner's Homebrew OpenSSL only starts on a
-      # Mac that has it at the same path.
-      - name: Check that the binary only needs system libraries
-        run: scripts/check-darwin-linkage.sh dist/darwin_arm64/crystalreleaser_darwin_arm64/crystalreleaser
 
       - name: Upload
         uses: actions/upload-artifact@v7
@@ -144,13 +146,15 @@ jobs:
       - name: Build crystalreleaser
         run: mise dev:build
 
+      # The OpenSSL static_libs links (see .crystalreleaser.yml): the same
+      # formula on both architectures, whatever the runner has by default.
+      - name: Install OpenSSL 4
+        run: brew install openssl@4
+
+      # Fails when the binary depends on a library macOS does not ship
+      # (otool -L): the check runs in the build itself.
       - name: Build the darwin/amd64 binary
         run: bin/crystalreleaser build --split --clean
-
-      # A binary linked against the runner's Homebrew OpenSSL only starts on a
-      # Mac that has it at the same path.
-      - name: Check that the binary only needs system libraries
-        run: scripts/check-darwin-linkage.sh dist/darwin_amd64/crystalreleaser_darwin_amd64/crystalreleaser
 
       - name: Upload
         uses: actions/upload-artifact@v7

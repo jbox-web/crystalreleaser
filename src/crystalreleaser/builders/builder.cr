@@ -43,6 +43,38 @@ module Crystalreleaser
       warnings
     end
 
+    # Where every Mac has its libraries. A darwin binary may only load from
+    # there: an allow list rather than a ban on Homebrew's prefixes, because
+    # MacPorts (/opt/local), Nix (/nix/store), a custom prefix or a library
+    # next to the binary (@rpath) are just as missing on the Mac the binary
+    # is installed on, and a list of known offenders misses the next one.
+    SYSTEM_LIBRARY_PREFIXES = {"/usr/lib/", "/System/Library/"}
+
+    # The libraries `otool -L` lists outside SYSTEM_LIBRARY_PREFIXES. The
+    # lines that end with a colon name the binary, or one slice of a
+    # universal binary.
+    def self.foreign_libraries(otool_output : String) : Array(String)
+      otool_output.lines.compact_map do |line|
+        next if line.rstrip.ends_with?(':') || !line.starts_with?(/\s/)
+        library = line.strip.sub(/\s+\(compatibility version.*\z/, "")
+        library unless library.empty? || SYSTEM_LIBRARY_PREFIXES.any? { |prefix| library.starts_with?(prefix) }
+      end
+    end
+
+    # Fails when a darwin binary depends on a library macOS does not ship:
+    # it would only start on a Mac that has it at the same path. Returns a
+    # warning instead when `otool` is missing (a cross build from linux).
+    def self.check_darwin_libraries(path : String, label : String, otool : String = "otool") : String?
+      return "#{label}: #{otool} is not installed: the libraries the binary loads are not checked" unless Process.find_executable(otool)
+      ok, output = capture([otool, "-L", path])
+      raise BuildError.new("#{label}: #{otool} -L failed: #{output.strip}") unless ok
+      foreign = foreign_libraries(output)
+      return if foreign.empty?
+      raise BuildError.new("#{label}: the binary depends on libraries macOS does not ship, so it only starts on a Mac " \
+                           "that has them at the same path:\n" + foreign.join('\n') { |library| "      #{library}" } +
+                           "\n    link them statically (static_libs) or drop them")
+    end
+
     # Runs `file -b` on a binary when `file` is installed.
     def self.describe(path : String) : String?
       return unless Process.find_executable("file")

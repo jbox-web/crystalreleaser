@@ -81,6 +81,19 @@ module Crystalreleaser
       end
     end
 
+    # Libraries of a Homebrew formula a native darwin build links
+    # statically: `libs` are their names as for -l (ssl for libssl.a).
+    class StaticLibs
+      include YAML::Serializable
+      include YAML::Serializable::Strict
+
+      property formula : String
+      property libs : Array(String)
+
+      def initialize(@formula : String, @libs : Array(String))
+      end
+    end
+
     class Build
       include YAML::Serializable
       include YAML::Serializable::Strict
@@ -98,6 +111,9 @@ module Crystalreleaser
       property platforms : Array(Platform) = [] of Platform
       property docker : Docker = Docker.new
       property cross : Cross = Cross.new
+      # On the build, not on a platform: arm64 and amd64 must embed the same
+      # library, which one formula for both is what guarantees.
+      property static_libs : StaticLibs? = nil
 
       def initialize(@id : String = "", @target : String? = nil)
       end

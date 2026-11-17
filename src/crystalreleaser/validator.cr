@@ -139,6 +139,7 @@ module Crystalreleaser
           @errors << "#{field}.cross.linker: unknown linker '#{build.cross.linker}' (expected zig or cc)"
         end
         check_build_source(build, field)
+        build.static_libs.try { |static| check_static_libs(build, static, field) }
         check_platforms(build, field)
         check_env_list(build.env, "#{field}.env", PLATFORM_VARS)
         check_docker(build.docker, field, build.platforms.any? { |platform| platform.strategy == "docker" })
@@ -174,6 +175,26 @@ module Crystalreleaser
         unless package.matches?(/\A[a-z0-9][a-z0-9+._-]*(?:[~=<>]+[A-Za-z0-9.+_-]+)?\z/)
           @errors << "#{field}.docker.packages[#{index}]: #{package.inspect} is not an apk package name"
         end
+      end
+    end
+
+    private def check_static_libs(build : Config::Build, static : Config::StaticLibs, field : String) : Nil
+      unless static.formula.matches?(/\A[a-z0-9][a-z0-9@+._\/-]*\z/)
+        @errors << "#{field}.static_libs.formula: #{static.formula.inspect} is not a Homebrew formula name"
+      end
+      @errors << "#{field}.static_libs.libs: at least one library is required" if static.libs.empty?
+      static.libs.each_with_index do |name, index|
+        if name.starts_with?("lib") || name.ends_with?(".a") || name.ends_with?(".dylib")
+          @errors << "#{field}.static_libs.libs[#{index}]: #{name.inspect} is a file name: write the library name, " \
+                     "as for -l (ssl for libssl.a)"
+        elsif !name.matches?(/\A[A-Za-z0-9_+.-]+\z/)
+          @errors << "#{field}.static_libs.libs[#{index}]: #{name.inspect} is not a library name"
+        end
+      end
+      # Ignored elsewhere: the linux builds are static already, and a cross
+      # build links against its sysroot.
+      unless build.platforms.any? { |platform| platform.os == "darwin" && platform.strategy == "native" }
+        @warnings << "#{field}.static_libs: only native darwin builds use it, and this build has none"
       end
     end
 

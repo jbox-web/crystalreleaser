@@ -10,9 +10,6 @@
 # licenses-spdx/ and licenses-upstream/, all of which are tracked.
 /licenses/
 
-# Assembled by scripts/static-libs.sh for the release builds.
-/static-libs/
-
 # Ignore all bin files
 /bin/*
 !/bin/.keep

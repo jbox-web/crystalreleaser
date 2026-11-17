@@ -38,8 +38,9 @@ brew 'kcov'
 # the docker-tagged specs go through.
 cask 'docker'
 
-# OpenSSL and the pkg-config that locates it: the mise-installed Crystal does
-# not embed it. scripts/static-libs.sh copies its static archives for the
-# release builds, so that the darwin binaries do not depend on it at run time.
-brew 'openssl'
+# OpenSSL 4 and the pkg-config that locates it: the mise-installed Crystal does
+# not embed OpenSSL. The darwin builds link this formula's static archives
+# (static_libs in .crystalreleaser.yml), so the binaries do not depend on it
+# at run time.
+brew 'openssl@4'
 brew 'pkgconf'

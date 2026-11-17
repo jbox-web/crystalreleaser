@@ -16,13 +16,12 @@ builds:
     env:
       # Read by src/crystalreleaser/version.cr at compile time.
       - CRYSTALRELEASER_VERSION={{ .Version }}
-      # static-libs/ holds the static OpenSSL on macOS, so that the darwin
-      # binaries do not depend on a Homebrew library (scripts/static-libs.sh).
-      # Through CRYSTAL_OPTS and not `flags:`, because the path must be
-      # absolute: the linker runs in the compiler cache, not in the project.
-      # In the docker builds the folder does not exist, which the linker
-      # ignores.
-      - CRYSTAL_OPTS=--link-flags=-L{{ .Env.PWD }}/static-libs
+    # The darwin binaries link Homebrew's OpenSSL 4 statically, the same on
+    # arm64 and amd64: they then only depend on libraries macOS ships, which
+    # the build checks with otool. The runners install the formula first.
+    static_libs:
+      formula: openssl@4
+      libs: [ssl, crypto]
     platforms:
       - os: linux
         arch: amd64
@@ -43,12 +42,11 @@ builds:
     # the static libraries of licenses.manifest.
 
 # The binary embeds its third-party notices (licenses/), which must be
-# assembled before compiling, and links the libraries of static-libs/. Before
-# hooks run on every runner of a split build, and not during the merge.
+# assembled before compiling. Before hooks run on every runner of a split
+# build, and not during the merge.
 before:
   hooks:
     - bash scripts/harvest-licenses.sh
-    - bash scripts/static-libs.sh
 
 archives:
   - id: default

@@ -48,7 +48,10 @@ there are only these:
 - `.github/workflows/ci.yml` — the header and the comment of
   `build_static_binaries` say that the release path is crystalreleaser
   itself, without the Makefile.release / docker-bake.hcl chain of the template.
-  That job also runs the two binaries it built (`--version`). A `test_cross`
+  That job also runs the two binaries it built (`--version`). The macOS test
+  jobs install `openssl@4`, and require it with `otool` and `cc` in
+  `SPEC_REQUIRE_TOOLS`: the darwin libraries check is tried on a binary
+  linked to it. A `test_cross`
   job runs the examples tagged `cross` with zig and an Alpine sysroot: the
   cross strategy is reached by nothing else. The linux and
   macOS test jobs set `SPEC_REQUIRE_TOOLS`, and the linux ones install `rpm`,
@@ -58,8 +61,8 @@ there are only these:
   split/merge release of docs/github-actions.md, building the tool from source.
 - `Brewfile` — `gettext` removed, `cask 'docker'` uncommented with a comment
   of its own (the docker build strategy, not `docker buildx bake`), the
-  commented `ollama` example dropped, `openssl` and `pkgconf` added: the release builds
-  link OpenSSL statically on macOS (`scripts/static-libs.sh`).
+  commented `ollama` example dropped, `openssl@4` and `pkgconf` added: the release builds
+  link OpenSSL 4 statically on macOS (`static_libs` in .crystalreleaser.yml).
 - `version.cr` — VERSION reads the `CRYSTALRELEASER_VERSION` macro env first
   (ignored when empty), the shard version otherwise; TARGET knows `freebsd`,
   which the tool can target; the CLI wiring block is dropped.

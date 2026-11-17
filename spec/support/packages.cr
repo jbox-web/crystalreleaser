@@ -28,6 +28,27 @@ def run_tool(args : Array(String)) : String
   output
 end
 
+# Marks the example pending off macOS: otool, and the Homebrew libraries a
+# darwin binary must not depend on, only exist there. SPEC_REQUIRE_TOOLS does
+# not apply: `all` on a linux runner must not fail these examples.
+def pending_unless_macos! : Nil
+  {% unless flag?(:darwin) %}
+    pending!("macOS only")
+  {% end %}
+end
+
+# Marks the example pending when the Homebrew formula is not installed, or
+# fails it when SPEC_REQUIRE_TOOLS names the formula (or says `all`). Returns
+# the formula's prefix.
+def pending_homebrew!(formula : String) : String
+  if prefix = Crystalreleaser::Builders::Native.brew_prefix(formula)
+    return prefix
+  end
+  required = ENV.fetch("SPEC_REQUIRE_TOOLS", "").split(',').map(&.strip)
+  raise "#{formula} is required by SPEC_REQUIRE_TOOLS but Homebrew has it not" if required.includes?(formula) || required.includes?("all")
+  pending!("Homebrew has no #{formula}")
+end
+
 # Marks the example pending when a system tool the spec checks its output
 # with is missing. These tools are the only judges of the hand-written formats
 # that are not this code itself, so a run that must not go without them lists

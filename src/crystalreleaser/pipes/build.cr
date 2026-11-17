@@ -145,6 +145,11 @@ module Crystalreleaser
       end
 
       private def register(ctx : Context, build : Config::Build, platform : Config::Platform, path : Path) : Nil
+        if platform.os == "darwin"
+          Builders.check_darwin_libraries(path.to_s, "#{build.id} #{platform.os}/#{platform.arch}").try do |warning|
+            ctx.logger.warn(warning)
+          end
+        end
         triple = Builders.triple(platform.os, platform.arch, platform.static?)
         ctx.artifacts.add(Artifact.new(Artifact::Type::Binary, build.binary, ctx.relative(path.to_s),
           os: platform.os, arch: platform.arch, build_id: build.id, size: File.size(path),

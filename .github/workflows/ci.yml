@@ -285,8 +285,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     env:
-      # As on linux, minus rpm and dpkg-deb, which macOS does not have.
-      SPEC_REQUIRE_TOOLS: cpio,tar,unzip
+      # As on linux, minus rpm and dpkg-deb, which macOS does not have; plus
+      # otool, cc and openssl@4, which the darwin libraries check is tried with.
+      SPEC_REQUIRE_TOOLS: cpio,tar,unzip,otool,cc,openssl@4
     steps:
       - name: Git checkout
         uses: actions/checkout@v7
@@ -299,6 +300,10 @@ jobs:
       # TODO: remove me when https://github.com/crystal-lang/crystal/issues/16746 is fixed
       - name: Fix Crystal shards
         run: mise dev:fix-shards-command
+
+      # A binary linked to it is what the darwin libraries check must refuse.
+      - name: Install OpenSSL 4
+        run: brew install openssl@4
 
       - name: Install dependencies
         run: mise dev:deps
@@ -313,8 +318,9 @@ jobs:
     runs-on: macos-26-intel
     timeout-minutes: 30
     env:
-      # As on linux, minus rpm and dpkg-deb, which macOS does not have.
-      SPEC_REQUIRE_TOOLS: cpio,tar,unzip
+      # As on linux, minus rpm and dpkg-deb, which macOS does not have; plus
+      # otool, cc and openssl@4, which the darwin libraries check is tried with.
+      SPEC_REQUIRE_TOOLS: cpio,tar,unzip,otool,cc,openssl@4
     steps:
       - name: Git checkout
         uses: actions/checkout@v7
@@ -327,6 +333,10 @@ jobs:
       # TODO: remove me when https://github.com/crystal-lang/crystal/issues/16746 is fixed
       - name: Fix Crystal shards
         run: mise dev:fix-shards-command
+
+      # A binary linked to it is what the darwin libraries check must refuse.
+      - name: Install OpenSSL 4
+        run: brew install openssl@4
 
       - name: Install dependencies
         run: mise dev:deps

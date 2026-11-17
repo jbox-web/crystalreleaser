@@ -75,6 +75,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - uses: jdx/mise-action@v5
+      # The formula of static_libs, the same on both architectures.
+      - run: brew install openssl@4
       - run: crystalreleaser build --split --clean
       - uses: actions/upload-artifact@v7
         with:
@@ -89,6 +91,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - uses: jdx/mise-action@v5
+      # The formula of static_libs, the same on both architectures.
+      - run: brew install openssl@4
       - run: crystalreleaser build --split --clean
       - uses: actions/upload-artifact@v7
         with:
@@ -136,5 +140,10 @@ Notes:
   same, let that job run anyway (`if: ${{ !cancelled() }}`) and call
   `release --merge --allow-missing`: the merge then warns about the missing
   platforms instead of failing with their list.
+- The darwin jobs install the formula of `static_libs` (`brew install
+  openssl@4`) before building: the runners do not all have the same OpenSSL
+  by default (`openssl@3` on `macos-26-intel` when this was written), and a
+  darwin build that still loads a Homebrew library fails its `otool -L`
+  check rather than shipping a binary that only starts on that runner.
 - GitHub retired the `macos-13` and `macos-14` images (macOS 14 on
   2026-11-02); `macos-26` is arm64 and `macos-26-intel` is x86_64.
