@@ -38,9 +38,9 @@ builds:
       - os: darwin
         arch: amd64
         strategy: native
-    docker:
-      # The compiler version pinned in mise.toml, whatever the host has.
-      image: 84codes/crystal:1.20.3-alpine
+    # No docker section: the linux binaries are built in the image
+    # crystalreleaser generates, alpine:3.24 with Alpine's own Crystal and
+    # the static libraries of licenses.manifest.
 
 # The binary embeds its third-party notices (licenses/), which must be
 # assembled before compiling, and links the libraries of static-libs/. Before

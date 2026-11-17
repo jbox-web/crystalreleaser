@@ -34,7 +34,9 @@ there are only these:
   - `dev:docker-image` removed, and `release:static` runs crystalreleaser
     itself instead of `docker buildx bake`: the tool releases itself
     (dogfooding), so there is no Dockerfile, Makefile.release nor
-    docker-bake.hcl. It depends on `dev:build` and runs the two steps of
+    docker-bake.hcl: the docker builds run in the image crystalreleaser
+    generates (alpine:3.24 and Alpine's own Crystal, never a third-party
+    Crystal image). It depends on `dev:build` and runs the two steps of
     release.yml (`build --split --snapshot --clean`, then `release --merge
     --snapshot --allow-missing --skip=publish`), so that the split and the
     merge are exercised on every push and not only by a tag.
@@ -45,7 +47,7 @@ there are only these:
     `release:build`, their only user.
 - `.github/workflows/ci.yml` — the header and the comment of
   `build_static_binaries` say that the release path is crystalreleaser
-  itself, without the Dockerfile / Makefile.release chain of the template.
+  itself, without the Makefile.release / docker-bake.hcl chain of the template.
   That job also runs the two binaries it built (`--version`). A `test_cross`
   job runs the examples tagged `cross` with zig and an Alpine sysroot: the
   cross strategy is reached by nothing else. The linux and

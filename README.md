@@ -99,7 +99,7 @@ appear on its command line.
 | Strategy | What runs | Platforms | Limits |
 |---|---|---|---|
 | `native` | `crystal build` on the host | the host's own os/arch | Skipped (with a warning) on any other host. `static: true` needs a musl host (Alpine): glibc cannot be linked statically, and macOS has no static linking at all. |
-| `docker` | `crystal build` in a Crystal image (`84codes/crystal:<version>-alpine` by default), with `--static` when the platform says `static: true` | linux/amd64, linux/arm64 | In an Alpine image, set `static: true`: a dynamic musl binary runs on no glibc distribution (`check` warns about it). Needs docker; the other architecture runs under QEMU and needs binfmt (`docker run --privileged --rm tonistiigi/binfmt --install arm64`). Emulated builds run one at a time. |
+| `docker` | `crystal build` in a Crystal image, with `--static` when the platform says `static: true`: by default an image built on Alpine with Alpine's own Crystal (see below), or the project's Dockerfile, or a given image | linux/amd64, linux/arm64 | In an Alpine image, set `static: true`: a dynamic musl binary runs on no glibc distribution (`check` warns about it). Needs docker; the other architecture runs under QEMU and needs binfmt (`docker run --privileged --rm tonistiigi/binfmt --install arm64`). Emulated builds run one at a time. |
 | `cross` | `crystal build --cross-compile`, then `zig cc` against a sysroot (or, with `linker: cc`, `cc --target` when `cc` is clang and `<triple>-gcc` when it is gcc) | any target with a sysroot | The sysroot must hold the target's static libraries (libgc, pcre2, libyaml, openssl...). crystalreleaser does not provide it; it fails if it is missing. |
 
 A musl sysroot for linux/arm64 can be taken from Alpine (verified with zig
@@ -124,6 +124,23 @@ named volumes: `crystalreleaser-cache-<arch>-<project>` and
 digest of the project path. Two builds, or two projects built at the same
 time, never share a `lib/`. Mounting that volume leaves an empty `lib/` in
 the project when it had none.
+
+The build image is one of three, set under `docker:`:
+
+- by default, crystalreleaser builds it from a Dockerfile it writes: the
+  stable Alpine (`alpine`, 3.24 by default), Alpine's own `crystal` package at
+  the minor version of the host's compiler, the static libraries the stdlib
+  links (boehm-gc, openssl, pcre2, libyaml, zlib, musl), and the project's own
+  `packages` (`libxml2-static`, `gmp-static`...). Alpine's compiler and
+  libraries, not a third-party image's;
+- `dockerfile`: the project's own Dockerfile (its `target` stage, if given);
+- `image`: an image pulled as it is.
+
+A built image is built for each architecture with `docker build --platform
+linux/<arch>`, once per build in a run, tagged
+`crystalreleaser-build-<project>-<build id>-<arch>`. The build context is an
+empty folder: the Dockerfile only installs the toolchain, the project is
+mounted when the build runs.
 
 After each build, `file` (when installed) checks the architecture and, when
 asked, the static linking; a mismatch is a warning.
@@ -213,7 +230,11 @@ builds:
       - { os: linux, arch: arm64, strategy: docker, static: true }
       - { os: darwin, arch: arm64, strategy: native }
     docker:
-      image: 84codes/crystal:{{ .CrystalVersion }}-alpine
+      alpine: "3.24"                # the generated image (default): see below
+      packages: [libxml2-static]    # apk packages the project links, besides the base ones
+      # dockerfile: Dockerfile      # or the project's own Dockerfile...
+      # target: toolchain           #   ...and its stage (default: the last one)
+      # image: my/crystal:1.20      # or an image pulled as it is
       platform_flag: true           # pass --platform linux/<arch>
       shards_install: true
     cross:

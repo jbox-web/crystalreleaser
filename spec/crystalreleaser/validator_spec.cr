@@ -155,6 +155,50 @@ describe Crystalreleaser::Validator do
       errors("builds:\n  - id: \" \"\n    target: toy\n").should eq(["builds[0].id: \" \" is not a plain name"])
     end
 
+    describe "docker.dockerfile" do
+      docker = "      - os: linux\n        arch: amd64\n        strategy: docker\n        static: true\n"
+
+      it "accepts a Dockerfile of the project, with or without a target" do
+        errors(build_with(docker, "    docker:\n      dockerfile: Dockerfile\n")).should be_empty
+        errors(build_with(docker, "    docker:\n      dockerfile: build/Dockerfile\n      target: toolchain\n")).should be_empty
+      end
+
+      it "rejects an image and a Dockerfile together: only one can be the build image" do
+        errors(build_with(docker, "    docker:\n      image: alpine:3.24\n      dockerfile: Dockerfile\n"))
+          .should eq(["builds[0].docker: set image or dockerfile, not both"])
+      end
+
+      it "rejects the settings of the generated image next to an image or a Dockerfile" do
+        errors(build_with(docker, "    docker:\n      dockerfile: Dockerfile\n      alpine: \"3.24\"\n"))
+          .should eq(["builds[0].docker: alpine and packages only apply to the generated image, not with dockerfile"])
+        errors(build_with(docker, "    docker:\n      image: my/crystal\n      packages: [gmp-static]\n"))
+          .should eq(["builds[0].docker: alpine and packages only apply to the generated image, not with image"])
+      end
+
+      it "rejects an Alpine release or a package name apk would not take" do
+        errors(build_with(docker, "    docker:\n      alpine: latest\n      packages: [\"gmp static\"]\n")).should eq([
+          %(builds[0].docker.alpine: "latest" is not an Alpine release (e.g. 3.24)),
+          %(builds[0].docker.packages[0]: "gmp static" is not an apk package name),
+        ])
+      end
+
+      it "rejects a target without a Dockerfile" do
+        errors(build_with(docker, "    docker:\n      target: toolchain\n"))
+          .should eq(["builds[0].docker.target: only used with docker.dockerfile"])
+      end
+
+      it "rejects a Dockerfile outside the project" do
+        errors(build_with(docker, "    docker:\n      dockerfile: ../Dockerfile\n"))
+          .should eq(["builds[0].docker.dockerfile: must be a relative path without '..' or '//', got \"../Dockerfile\""])
+      end
+
+      # Its base is not known before it is built.
+      it "does not guess whether the image of a Dockerfile is an Alpine one" do
+        warnings(build_with("      - os: linux\n        arch: amd64\n        strategy: docker\n", "    docker:\n      dockerfile: Dockerfile\n"))
+          .should be_empty
+      end
+    end
+
     it "rejects an empty docker image for a docker build" do
       errors(build_with("      - os: linux\n        arch: amd64\n        strategy: docker\n        static: true\n",
         "    docker:\n      image: \"\"\n")).should eq(["builds[0].docker.image: must not be empty"])

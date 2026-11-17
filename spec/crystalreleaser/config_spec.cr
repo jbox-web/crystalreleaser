@@ -85,7 +85,8 @@ describe Crystalreleaser::Config do
         build = load(project).builds.first
         build.main.should eq("src/toy.cr")
         build.binary.should eq("toy")
-        build.docker.image.should eq("84codes/crystal:{{ .CrystalVersion }}-alpine")
+        {build.docker.image, build.docker.dockerfile, build.docker.alpine}.should eq({nil, nil, nil})
+        build.docker.packages.should be_empty
         build.docker.platform_flag?.should be_true
         build.docker.shards_install?.should be_true
         build.cross.linker.should eq("zig")

@@ -1,4 +1,5 @@
 require "digest/sha256"
+require "file_utils"
 
 require "../context"
 require "./builder"
@@ -27,6 +28,13 @@ module Crystalreleaser
     # The values of `env:` reach the container through the environment of the
     # docker process (`-e NAME` without a value): on the command line they
     # would be readable in `ps` and in the --verbose log.
+    #
+    # The image is built, unless `docker.image` names one: from the
+    # project's own `docker.dockerfile` (its `target` stage, if given), or
+    # from the Dockerfile `generated_dockerfile` writes. It is built for the
+    # platform once per build and architecture in a run, then used like any
+    # other. The build context is an empty folder: the Dockerfile provides
+    # the toolchain, and the project is mounted when the build runs.
     class Docker < Builder
       BINFMT_HINT = "docker run --privileged --rm tonistiigi/binfmt --install %s"
       # --production needs shard.lock, which a project without dependencies
@@ -41,6 +49,10 @@ module Crystalreleaser
       @available : Bool? = nil
 
       def initialize(@host : Host)
+        # Images already built in this run, and the lock that builds them
+        # one at a time: the same image is then never built twice.
+        @built = Set(String).new
+        @image_lock = Mutex.new
       end
 
       def available? : Bool
@@ -75,9 +87,79 @@ module Crystalreleaser
         ctx.config_env(build, platform)
       end
 
+      # What every generated image installs besides Crystal: what `shards`
+      # and the version stamping need, and the static libraries the stdlib
+      # links (boehm-gc, openssl, pcre2, libyaml, zlib, musl).
+      BASE_PACKAGES = %w[
+        shards git musl-dev gc-dev gc-static openssl-dev openssl-libs-static
+        pcre2-dev pcre2-static yaml-dev yaml-static zlib-dev zlib-static
+      ]
+
+      def builds_image?(build : Config::Build) : Bool
+        build.docker.image.nil?
+      end
+
       def image(build : Config::Build, platform : Config::Platform, ctx : Context) : String
+        image = build.docker.image
+        return built_image(build, platform, ctx) unless image
         index = ctx.config.builds.index(build) || 0
-        ctx.render(build.docker.image, "builds[#{index}].docker.image", ctx.platform_vars(build, platform))
+        ctx.render(image, "builds[#{index}].docker.image", ctx.platform_vars(build, platform))
+      end
+
+      # The Dockerfile of the default image: the stable Alpine, its own
+      # Crystal package at the minor version of the host's compiler (the
+      # one mise pins), the base packages and the project's.
+      def generated_dockerfile(build : Config::Build, ctx : Context) : String
+        alpine = build.docker.alpine || Config::Docker::DEFAULT_ALPINE
+        minor = ctx.crystal_version.split('.').first(2).join('.')
+        raise BuildError.new("cannot tell the version of the host's crystal, which the image must match") if minor.empty?
+        packages = ["crystal=~#{minor}"] + BASE_PACKAGES + build.docker.packages
+        "# Written by crystalreleaser: the toolchain of the docker builds.\n" \
+        "FROM alpine:#{alpine}\n" \
+        "RUN apk add --no-cache #{packages.join(' ')}\n"
+      end
+
+      # The local tag of a built image, generated or from the project's
+      # Dockerfile.
+      def built_image(build : Config::Build, platform : Config::Platform, ctx : Context) : String
+        "crystalreleaser-build-#{project_key(ctx)}-#{build.id.downcase.gsub(/[^a-z0-9_.-]/, '_')}-#{platform.arch}"
+      end
+
+      # `docker build` of the image for the platform: the project's
+      # Dockerfile, or the generated one written in `context`, the build
+      # context, empty otherwise.
+      def image_command(build : Config::Build, platform : Config::Platform, ctx : Context, context : String) : Array(String)
+        path =
+          if dockerfile = build.docker.dockerfile
+            File.join(ctx.dir, dockerfile).tap do |full|
+              raise BuildError.new("#{label(build, platform)}: docker.dockerfile not found: #{dockerfile}") unless File.file?(full)
+            end
+          else
+            File.join(context, "Dockerfile")
+          end
+        args = ["docker", "build", "--platform", "linux/#{platform.arch}", "-t", built_image(build, platform, ctx)]
+        build.docker.target.try { |target| args.concat(["--target", target]) }
+        args.concat(["-f", path, context])
+      end
+
+      private def build_image(build : Config::Build, platform : Config::Platform, ctx : Context) : Nil
+        tag = built_image(build, platform, ctx)
+        @image_lock.synchronize do
+          next if @built.includes?(tag)
+          context = File.join(Dir.tempdir, "crystalreleaser-context-#{Random::Secure.hex(6)}")
+          Dir.mkdir_p(context)
+          begin
+            source = build.docker.dockerfile || "the generated Dockerfile"
+            File.write(File.join(context, "Dockerfile"), generated_dockerfile(build, ctx)) unless build.docker.dockerfile
+            args = image_command(build, platform, ctx, context)
+            ctx.logger.debug(args.join(' '))
+            ok, log = Builders.capture(args)
+            raise BuildError.new("#{label(build, platform)}: building the image of #{source} failed: #{log.strip}") unless ok
+          ensure
+            FileUtils.rm_rf(context)
+          end
+          @built << tag
+        end
       end
 
       def command(build : Config::Build, platform : Config::Platform, ctx : Context,
@@ -119,6 +201,7 @@ module Crystalreleaser
         check_emulation(build, platform) if emulated?(platform)
         output = Builders.output_path(ctx, build, platform)
         Dir.mkdir_p(File.dirname(output))
+        build_image(build, platform, ctx) if builds_image?(build)
 
         {prepare_command(build, platform, ctx), command(build, platform, ctx)}.each do |args|
           ctx.logger.debug(args.join(' '))

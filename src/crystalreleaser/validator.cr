@@ -141,11 +141,39 @@ module Crystalreleaser
         check_build_source(build, field)
         check_platforms(build, field)
         check_env_list(build.env, "#{field}.env", PLATFORM_VARS)
-        check_template(build.docker.image, "#{field}.docker.image", PLATFORM_VARS)
-        if build.docker.image.blank? && build.platforms.any? { |platform| platform.strategy == "docker" }
-          @errors << "#{field}.docker.image: must not be empty"
-        end
+        check_docker(build.docker, field, build.platforms.any? { |platform| platform.strategy == "docker" })
         build.cross.sysroot.try { |sysroot| check_template(sysroot, "#{field}.cross.sysroot", PLATFORM_VARS) }
+      end
+    end
+
+    private def check_docker(docker : Config::Docker, field : String, used : Bool) : Nil
+      if dockerfile = docker.dockerfile
+        @errors << "#{field}.docker: set image or dockerfile, not both" if docker.image
+        check_relative_path(dockerfile, "#{field}.docker.dockerfile")
+      elsif docker.target
+        @errors << "#{field}.docker.target: only used with docker.dockerfile"
+      end
+      check_generated_image(docker, field)
+      if image = docker.image
+        check_template(image, "#{field}.docker.image", PLATFORM_VARS)
+        @errors << "#{field}.docker.image: must not be empty" if used && image.blank?
+      end
+    end
+
+    # The settings of the image crystalreleaser generates, which only exists
+    # without an image or a Dockerfile.
+    private def check_generated_image(docker : Config::Docker, field : String) : Nil
+      if (docker.alpine || !docker.packages.empty?) && (docker.dockerfile || docker.image)
+        @errors << "#{field}.docker: alpine and packages only apply to the generated image, " \
+                   "not with #{docker.dockerfile ? "dockerfile" : "image"}"
+      end
+      docker.alpine.try do |alpine|
+        @errors << "#{field}.docker.alpine: #{alpine.inspect} is not an Alpine release (e.g. 3.24)" unless alpine.matches?(/\A\d+\.\d+\z/)
+      end
+      docker.packages.each_with_index do |package, index|
+        unless package.matches?(/\A[a-z0-9][a-z0-9+._-]*(?:[~=<>]+[A-Za-z0-9.+_-]+)?\z/)
+          @errors << "#{field}.docker.packages[#{index}]: #{package.inspect} is not an apk package name"
+        end
       end
     end
 
@@ -174,7 +202,9 @@ module Crystalreleaser
         end
         needs_sysroot ||= platform.strategy == "cross"
         check_platform(platform, where, couple)
-        if platform.strategy == "docker" && !platform.static? && build.docker.image.includes?("alpine")
+        # The base of an image built from a Dockerfile is not known before.
+        if platform.strategy == "docker" && !platform.static? && build.docker.dockerfile.nil? &&
+           (build.docker.image.nil? || build.docker.image.to_s.includes?("alpine"))
           @warnings << "#{where}: a docker build in an Alpine image without static: true is linked dynamically " \
                        "against musl, and only runs on a musl system"
         end

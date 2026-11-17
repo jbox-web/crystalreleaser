@@ -40,7 +40,7 @@ describe Crystalreleaser::Builders::Docker do
         "-v", "crystalreleaser-lib-arm64-#{key}-toy:/src/lib",
         "-e", "HOME=/cache/home", "-e", "CRYSTAL_CACHE_DIR=/cache/crystal",
         "-e", "TOY_VERSION",
-        "--entrypoint", "sh", "84codes/crystal:1.20.3-alpine", "-c",
+        "--entrypoint", "sh", "crystalreleaser-build-#{key}-toy-arm64", "-c",
         "shards install && rm -f shard.lock && " \
         "crystal build src/toy.cr -o /src/dist/toy_linux_arm64/toy --release --static",
       ])
@@ -91,7 +91,7 @@ describe Crystalreleaser::Builders::Docker do
       Crystalreleaser::Builders::Docker.new(ctx.host).prepare_command(build, platform, ctx, 1000_u32, 1001_u32).should eq([
         "docker", "run", "--rm", "--platform", "linux/arm64",
         "-v", "crystalreleaser-cache-arm64-#{key}:/cache", "-v", "crystalreleaser-lib-arm64-#{key}-toy:/lib-cache",
-        "--entrypoint", "chown", "84codes/crystal:1.20.3-alpine", "-R", "1000:1001", "/cache", "/lib-cache",
+        "--entrypoint", "chown", "crystalreleaser-build-#{key}-toy-arm64", "-R", "1000:1001", "/cache", "/lib-cache",
       ])
     end
   end
@@ -104,6 +104,99 @@ describe Crystalreleaser::Builders::Docker do
       command.should_not contain("--platform")
       command[-3].should eq("my/crystal:arm64")
       command.last.should eq("crystal build src/toy.cr -o /src/dist/toy_linux_arm64/toy --release --static")
+    end
+  end
+
+  # Without an image nor a Dockerfile, the image is built from a Dockerfile
+  # crystalreleaser writes: the stable Alpine, its own Crystal package at
+  # the version of the host's compiler, and the static libraries the stdlib
+  # links.
+  describe "with the generated image" do
+    it "writes a Dockerfile on Alpine with its Crystal and the static libraries" do
+      Fixture.project(config: CONFIG) do |project|
+        ctx, build, _ = docker_context(project)
+        Crystalreleaser::Builders::Docker.new(ctx.host).generated_dockerfile(build, ctx).should eq(<<-DOCKERFILE)
+          # Written by crystalreleaser: the toolchain of the docker builds.
+          FROM alpine:3.24
+          RUN apk add --no-cache crystal=~1.20 shards git musl-dev gc-dev gc-static openssl-dev openssl-libs-static pcre2-dev pcre2-static yaml-dev yaml-static zlib-dev zlib-static
+
+          DOCKERFILE
+      end
+    end
+
+    it "takes the Alpine release and the packages of the project from the config" do
+      config = CONFIG + "\n    docker:\n      alpine: \"3.23\"\n      packages: [libxml2-static, gmp-static]\n"
+      Fixture.project(config: config) do |project|
+        ctx, build, _ = docker_context(project)
+        dockerfile = Crystalreleaser::Builders::Docker.new(ctx.host).generated_dockerfile(build, ctx)
+        dockerfile.should contain("FROM alpine:3.23\n")
+        dockerfile.should contain(" zlib-dev zlib-static libxml2-static gmp-static\n")
+      end
+    end
+
+    it "builds that image for the platform from an empty context, then compiles in it" do
+      Fixture.project(config: CONFIG) do |project|
+        ctx, build, platform = docker_context(project)
+        builder = Crystalreleaser::Builders::Docker.new(ctx.host)
+        tag = "crystalreleaser-build-#{project_key(project)}-toy-arm64"
+        builder.image_command(build, platform, ctx, "/empty").should eq([
+          "docker", "build", "--platform", "linux/arm64", "-t", tag, "-f", "/empty/Dockerfile", "/empty",
+        ])
+        builder.command(build, platform, ctx, 1_u32, 1_u32)[-3].should eq(tag)
+      end
+    end
+
+    it "pulls an image given in the config as it is, and builds none" do
+      Fixture.project(config: CONFIG + "\n    docker:\n      image: my/crystal:{{ .Arch }}\n") do |project|
+        ctx, build, platform = docker_context(project)
+        builder = Crystalreleaser::Builders::Docker.new(ctx.host)
+        builder.command(build, platform, ctx, 1_u32, 1_u32)[-3].should eq("my/crystal:arm64")
+        builder.builds_image?(build).should be_false
+      end
+    end
+  end
+
+  describe "with a Dockerfile of the project" do
+    with_dockerfile = CONFIG + "\n    docker:\n      dockerfile: build/Dockerfile\n      target: toolchain\n"
+
+    # The image is built from the project's own Dockerfile, once per build
+    # and architecture, then the build runs in it as with any other image.
+    # The context is an empty folder: the Dockerfile only provides the
+    # toolchain, the project is mounted when the build runs.
+    it "builds the image for the platform, then compiles in it" do
+      Fixture.project(config: with_dockerfile) do |project|
+        project.write("build/Dockerfile", "FROM alpine:3.24 AS toolchain\n")
+        ctx, build, platform = docker_context(project)
+        builder = Crystalreleaser::Builders::Docker.new(ctx.host)
+        tag = "crystalreleaser-build-#{project_key(project)}-toy-arm64"
+
+        image = builder.image_command(build, platform, ctx, "/empty")
+        image.should eq([
+          "docker", "build", "--platform", "linux/arm64", "-t", tag, "--target", "toolchain",
+          "-f", project.path("build/Dockerfile"), "/empty",
+        ])
+        command = builder.command(build, platform, ctx, 1_u32, 1_u32)
+        command[-3].should eq(tag)
+        builder.prepare_command(build, platform, ctx, 1_u32, 1_u32)[-5].should eq(tag)
+      end
+    end
+
+    it "builds the last stage when no target is given" do
+      Fixture.project(config: CONFIG + "\n    docker:\n      dockerfile: Dockerfile\n") do |project|
+        project.write("Dockerfile", "FROM alpine:3.24\n")
+        ctx, build, platform = docker_context(project)
+        Crystalreleaser::Builders::Docker.new(ctx.host).image_command(build, platform, ctx, "/empty")
+          .should_not contain("--target")
+      end
+    end
+
+    it "fails before any docker command when the Dockerfile is missing" do
+      Fixture.project(config: with_dockerfile) do |project|
+        ctx, build, platform = docker_context(project)
+        expect_raises(Crystalreleaser::BuildError, "toy linux/arm64: docker.dockerfile not found: build/Dockerfile") do
+          Crystalreleaser::Builders::Docker.new(ctx.host).image_command(build, platform, ctx, "/empty")
+        end
+      end
     end
   end
 

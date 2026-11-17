@@ -12,21 +12,22 @@
 #   HTTP::Client over TLS      -> openssl (libssl + libcrypto)
 #   GC, static libc, runtime   -> boehm-gc, musl, libgcc
 # CONFIRMED on 2026-11-17 against the link line of this very binary, captured
-# with `crystal build --static --verbose` in 84codes/crystal:1.20.3-alpine
-# (the same libraries as on 2026-11-12, when it was built with -Dpreview_mt):
-#   -lssl -lcrypto -lgc -lpcre2-8 -lpthread -lyaml -lz  (+ musl, libgcc)
+# with `crystal build --static --verbose` in the image crystalreleaser
+# generates for its docker builds (alpine:3.24, Alpine's crystal 1.20.3):
+#   -lssl -lcrypto -lgc -lpcre2-8 -lpthread -ldl -lyaml -lz  (+ musl, libgcc)
 # No gmp, no libevent. Licenses as apk records them in that image: openssl
-# 3.5.7 Apache-2.0, pcre2 10.47 BSD-3-Clause, yaml 0.2.5 MIT, zlib 1.3.2 Zlib,
-# musl 1.2.6 MIT. Re-run the check when a stdlib module is added or the
-# image moves.
+# 3.5.9 Apache-2.0, pcre2 10.49 BSD-3-Clause, yaml 0.2.5 MIT, zlib 1.4 Zlib,
+# musl 1.2.6 MIT, gc 8.2.12 Boehm-GC. Re-run the check when a stdlib module
+# is added or the image moves.
 #
 # MIT, BSD-3-Clause and zlib require the copyright notice to be reproduced,
 # and their SPDX text only has a blank there: those four libraries embed their
-# own license file, taken on 2026-11-12 from their sources at the versions
-# above (to be taken again when a version moves):
-#   pcre2    LICENCE.md  github.com/PCRE2Project/pcre2  tag pcre2-10.47
+# own license file, taken from their sources at the versions above (to be
+# taken again when a version moves; pcre2 and zlib checked identical at
+# their new versions on 2026-11-17):
+#   pcre2    LICENCE.md  github.com/PCRE2Project/pcre2  tag pcre2-10.49
 #   libyaml  License     github.com/yaml/libyaml        tag 0.2.5
-#   zlib     LICENSE     github.com/madler/zlib         tag v1.3.2
+#   zlib     LICENSE     github.com/madler/zlib         tag v1.4
 #   musl     COPYRIGHT   git.musl-libc.org/cgit/musl    tag v1.2.6
 clib    | openssl         | Apache-2.0
 clib    | pcre2           | licenses-upstream/pcre2.txt

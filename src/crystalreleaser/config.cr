@@ -47,9 +47,20 @@ module Crystalreleaser
       include YAML::Serializable
       include YAML::Serializable::Strict
 
-      # 84codes publishes multi-arch (amd64/arm64) Alpine images, which is
-      # what makes a static musl build possible for both architectures.
-      property image : String = "84codes/crystal:{{ .CrystalVersion }}-alpine"
+      # The stable Alpine whose own Crystal package the generated image
+      # installs.
+      DEFAULT_ALPINE = "3.24"
+
+      # The build image, one of three: `image`, pulled as it is; the image
+      # built from the project's own `dockerfile` (its `target` stage, if
+      # given); by default, the image built from a Dockerfile crystalreleaser
+      # writes: `alpine`, its Crystal and the static libraries the stdlib
+      # links, plus the project's `packages`.
+      property image : String? = nil
+      property dockerfile : String? = nil
+      property target : String? = nil
+      property alpine : String? = nil
+      property packages : Array(String) = [] of String
       property? platform_flag : Bool = true
       property? shards_install : Bool = true
 

@@ -33,7 +33,8 @@ builds:
         arch: arm64
         strategy: native
     docker:
-      image: 84codes/crystal:{{ .CrystalVersion }}-alpine
+      alpine: "3.24"
+      packages: [libxml2-static]
       platform_flag: true
       shards_install: true
     cross:
