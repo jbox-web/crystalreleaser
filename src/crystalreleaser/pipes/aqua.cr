@@ -8,8 +8,11 @@ require "./homebrew"
 module Crystalreleaser
   module Pipes
     # An aqua registry.yaml per `aqua:` entry. The `{{...}}` it contains are
-    # aqua's own templates, so the file is built with YAML::Builder and never
-    # goes through crystalreleaser's template engine. The asset template and
+    # aqua's own templates, so the file never goes through crystalreleaser's
+    # template engine. It is written the way aqua registries write their
+    # entries, list indented under `packages:`: a registry that concatenates
+    # the entries of its packages (jbox-web's build-registry.sh) can take it
+    # as it is, which libyaml's indentless lists broke. The asset template and
     # the supported environments are derived from the archives actually
     # produced. Written to dist/aqua/ before the release is published, with
     # no request: AquaPush pushes it to the registry afterwards.
@@ -56,57 +59,51 @@ module Crystalreleaser
         checksum = ctx.artifacts.filter(type: Artifact::Type::Checksum).first?
         owner, repo = repository(ctx)
 
-        YAML.build do |yaml|
-          yaml.mapping do
-            yaml.scalar "packages"
-            yaml.sequence do
-              yaml.mapping do
-                pair(yaml, "type", "github_release")
-                pair(yaml, "repo_owner", owner)
-                pair(yaml, "repo_name", repo)
-                pair(yaml, "description", aqua.description) unless aqua.description.empty?
-                # A string: aqua evaluates it as an expression.
-                yaml.scalar "version_constraint"
-                yaml.scalar "true", style: YAML::ScalarStyle::DOUBLE_QUOTED
-                pair(yaml, "asset", templates.first)
-                pair(yaml, "format", "tar.gz")
-                yaml.scalar "files"
-                yaml.sequence do
-                  binaries.each do |binary|
-                    yaml.mapping do
-                      pair(yaml, "name", binary)
-                      pair(yaml, "src", "#{wrap}/#{binary}") if wrap
-                    end
-                  end
-                end
-                yaml.scalar "supported_envs"
-                yaml.sequence { supported_envs(archives).each { |env| yaml.scalar env } }
-                if checksum
-                  yaml.scalar "checksum"
-                  yaml.mapping do
-                    pair(yaml, "type", "github_release")
-                    # Split checksums: one file per asset, named after it.
-                    asset = ctx.config.checksum.split? ? "{{.Asset}}#{Checksum::SPLIT_SUFFIX}" : aqua_template(checksum.name, version, nil, nil)
-                    pair(yaml, "asset", asset)
-                    pair(yaml, "algorithm", "sha256")
-                  end
-                end
-              end
-            end
+        checksum_asset = checksum.try do |file|
+          # Split checksums: one file per asset, named after it.
+          ctx.config.checksum.split? ? "{{.Asset}}#{Checksum::SPLIT_SUFFIX}" : aqua_template(file.name, version, nil, nil)
+        end
+        String.build do |io|
+          io << SCHEMA_COMMENT << "\n"
+          io << "packages:\n"
+          io << "  - type: github_release\n"
+          io << "    repo_owner: " << scalar(owner) << "\n"
+          io << "    repo_name: " << scalar(repo) << "\n"
+          io << "    description: " << scalar(aqua.description) << "\n" unless aqua.description.empty?
+          # A string: aqua evaluates it as an expression.
+          io << "    version_constraint: \"true\"\n"
+          io << "    asset: " << scalar(templates.first) << "\n"
+          io << "    format: tar.gz\n"
+          io << "    files:\n"
+          binaries.each do |binary|
+            io << "      - name: " << scalar(binary) << "\n"
+            io << "        src: " << scalar("#{wrap}/#{binary}") << "\n" if wrap
+          end
+          io << "    supported_envs:\n"
+          supported_envs(archives).each { |env| io << "      - " << scalar(env) << "\n" }
+          if checksum_asset
+            io << "    checksum:\n"
+            io << "      type: github_release\n"
+            io << "      asset: " << scalar(checksum_asset) << "\n"
+            io << "      algorithm: sha256\n"
           end
         end
       end
+
+      # Every entry of aqua's own registry starts with it: editors validate
+      # the file against the registry schema.
+      SCHEMA_COMMENT = "# yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/main/json-schema/registry.json"
 
       # What YAML 1.1, which the readers of a registry still follow, takes
       # for a boolean or for nothing when written bare.
       RESERVED = /\A(y|n|yes|no|on|off|true|false|null|~)\z/i
 
-      # Every value is text: one that would be read back as a boolean, a
-      # number or nothing is quoted.
-      private def pair(yaml : YAML::Builder, key : String, value : String) : Nil
-        yaml.scalar key
-        plain = YAML::Schema::Core.parse_scalar(value).is_a?(String) && !value.matches?(RESERVED)
-        yaml.scalar value, style: plain ? YAML::ScalarStyle::ANY : YAML::ScalarStyle::DOUBLE_QUOTED
+      # Plain text YAML reads back as the same string; anything else is
+      # double-quoted, in JSON syntax, which is also YAML's.
+      private def scalar(value : String) : String
+        plain = value.matches?(/\A[A-Za-z0-9][A-Za-z0-9 _.\/+@-]*\z/) && !value.ends_with?(' ') &&
+                !value.matches?(RESERVED) && YAML::Schema::Core.parse_scalar(value).is_a?(String)
+        plain ? value : value.to_json
       end
 
       # An archive name with the version, os and arch replaced by aqua's

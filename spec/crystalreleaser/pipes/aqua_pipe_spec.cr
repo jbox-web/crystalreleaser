@@ -159,6 +159,48 @@ describe Crystalreleaser::Pipes::Aqua do
     end
   end
 
+  # The jbox-web registry, like aqua's own, concatenates the entries of every
+  # pkgs/*/registry.yaml under one `packages:` key (scripts/build-registry.sh):
+  # an entry must be written the way the others are, its list indented under
+  # `packages:`, or the concatenation is no longer valid YAML.
+  it "writes the entry the way aqua registries do: schema comment, list indented under packages" do
+    Fixture.project(config: CONFIG) do |project|
+      Crystalreleaser::Pipes::Aqua.new.run(aqua_context(project, ALL))
+      File.read(project.path("dist/aqua/registry.yaml")).should eq(<<-YAML)
+        # yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/main/json-schema/registry.json
+        packages:
+          - type: github_release
+            repo_owner: jbox-web
+            repo_name: toy
+            description: A toy
+            version_constraint: "true"
+            asset: "toy_{{trimV .Version}}_{{.OS}}_{{.Arch}}.tar.gz"
+            format: tar.gz
+            files:
+              - name: toy
+            supported_envs:
+              - darwin
+              - linux
+            checksum:
+              type: github_release
+              asset: checksums.txt
+              algorithm: sha256
+
+        YAML
+    end
+  end
+
+  it "concatenates with an entry written by hand into one valid registry" do
+    Fixture.project(config: CONFIG) do |project|
+      Crystalreleaser::Pipes::Aqua.new.run(aqua_context(project, ALL))
+      ours = File.read(project.path("dist/aqua/registry.yaml"))
+      by_hand = "packages:\n  - type: github_release\n    repo_owner: jbox-web\n    repo_name: other\n"
+      # What build-registry.sh does: every entry after its own `packages:` line.
+      merged = "packages:\n" + [by_hand, ours].join(&.split("packages:\n", 2).last)
+      YAML.parse(merged)["packages"].as_a.map(&.["repo_name"].as_s).should eq(["other", "toy"])
+    end
+  end
+
   it "keeps version_constraint a string, not a boolean" do
     Fixture.project(config: CONFIG) do |project|
       Crystalreleaser::Pipes::Aqua.new.run(aqua_context(project, ALL))
