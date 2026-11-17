@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-11-17
 
 ### Added
 
@@ -25,3 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each format's own syntax.
 - Homebrew formula and aqua registry entry, written to `dist/` and pushed to
   their repositories; `skip_upload` keeps pre-releases out of them.
+- Docker builds in an image built on the stable Alpine with Alpine's own
+  Crystal (`docker.alpine`, `docker.packages`), in the project's own
+  Dockerfile (`docker.dockerfile`, `docker.target`), or in a given image.
+- `binary` archive format, the binary itself under a name of its own, and
+  `checksum.split`, one `<asset>.sha256` per asset.
+- `release.make_latest`; the release is pinned to the built commit.
+- Configuration files in packages (`contents[].type: config` and
+  `config|noreplace`).
+- Formula and registry entry generated before the release is published and
+  pushed after it; formulae that pass `brew audit --strict`.
+- darwin binaries that link OpenSSL statically and only depend on libraries
+  macOS ships.
+- `.crystalreleaser.example.yml`, a complete commented configuration.

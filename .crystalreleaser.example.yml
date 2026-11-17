@@ -1,0 +1,193 @@
+# A complete crystalreleaser configuration, every section written out and
+# commented, for a project `myapp` with a shard.yml target of the same name.
+#
+# Copy it to .crystalreleaser.yml and keep what the project needs: every
+# top-level key is optional, and what is left out is derived from shard.yml.
+# `crystalreleaser check` validates the result without building anything.
+#
+# This file is not read by crystalreleaser (it only looks for
+# .crystalreleaser.yml, .crystalreleaser.yaml and crystalreleaser.yml); a spec
+# loads and validates it, so that it cannot drift from what the tool accepts.
+version: 1
+project_name: myapp
+# Where everything is written. Must be a folder inside the project: --clean
+# removes it.
+dist: dist
+
+# Exported to the hooks and the builds, after rendering.
+env:
+  - MYAPP_BUILT_BY=crystalreleaser
+
+# Shell commands run in the project before building, on every runner of a
+# split build, never during the merge. Pass anything that comes from git or
+# from the environment through `shellquote`.
+before:
+  hooks:
+    - shards install --production
+
+builds:
+  - id: myapp
+    # The shard.yml target: `main` is deduced from it.
+    target: myapp
+    binary: myapp
+    flags: [--release, --no-debug]
+    # Read at compile time with `{{ env("MYAPP_VERSION") }}`: Crystal has no
+    # -ldflags -X.
+    env:
+      - MYAPP_VERSION={{ .Version }}
+    platforms:
+      # Static musl binaries, built with docker; the architecture that is not
+      # the host's runs under QEMU (binfmt).
+      - { os: linux, arch: amd64, strategy: docker, static: true }
+      - { os: linux, arch: arm64, strategy: docker, static: true }
+      # macOS has no static linking: each binary is built on a Mac of its own
+      # architecture, and links only the libraries macOS ships.
+      - { os: darwin, arch: arm64, strategy: native }
+      - { os: darwin, arch: amd64, strategy: native }
+      # Cross-compiled with zig against a sysroot (see `cross` below).
+      - { os: freebsd, arch: amd64, strategy: cross }
+
+    # The image the docker builds run in. One of three:
+    #
+    # 1. By default, an image crystalreleaser builds from a Dockerfile it
+    #    writes: the stable Alpine below, Alpine's own `crystal` package at
+    #    the minor version of the host's compiler, the static libraries the
+    #    stdlib links (boehm-gc, openssl, pcre2, libyaml, zlib, musl), and the
+    #    project's `packages`.
+    # 2. `dockerfile`: the project's own Dockerfile, and its `target` stage.
+    #    Its build context is empty: it installs the toolchain, the project is
+    #    mounted when the build runs.
+    # 3. `image`: an image pulled as it is.
+    #
+    # A built image is built once per build and architecture in a run, and
+    # tagged crystalreleaser-build-<project>-<build id>-<arch>.
+    docker:
+      alpine: "3.24"
+      # apk packages the project links besides the base ones, e.g. for XML
+      # (libxml2) or big numbers (gmp).
+      packages: [libxml2-dev, libxml2-static, gmp-dev, gmp-static]
+      # dockerfile: Dockerfile
+      # target: toolchain
+      # image: my-registry/crystal:1.20.3-alpine
+      # Passes --platform linux/<arch> to docker.
+      platform_flag: true
+      # Runs `shards install` in the container before compiling.
+      shards_install: true
+
+    cross:
+      # zig, or cc (clang, or the cross gcc of the target).
+      linker: zig
+      # Must hold the target's static libraries; crystalreleaser does not
+      # provide it.
+      sysroot: /opt/sysroots/{{ .Os }}-{{ .Arch }}
+      link_flags: []
+
+archives:
+  - id: default
+    builds: [myapp]
+    # tar.gz | zip | binary (the binary itself, with no archive around it)
+    formats: [tar.gz]
+    format_overrides:
+      - { os: windows, formats: [zip] }
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: false
+    # Globs from the project root; a folder is taken whole, hidden files
+    # included.
+    files:
+      - LICENSE
+      - README.md
+      - src: completions/*
+        dst: completions
+  # The bare binaries next to the archives, under names without the version:
+  # what a script that downloads `myapp-linux-amd64` expects.
+  - id: bare
+    builds: [myapp]
+    formats: [binary]
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  # true: one <asset>.sha256 next to each asset instead of checksums.txt.
+  split: false
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:", "Merge pull request"]
+  # Each commit goes to the first group whose regexp matches; the last group
+  # may omit it and takes what is left.
+  groups:
+    - { title: Features, regexp: '^feat(\(.+\))?!?:' }
+    - { title: Bug fixes, regexp: '^fix(\(.+\))?!?:' }
+    - { title: Others }
+
+release:
+  # Default: the origin remote, when it is on github.com.
+  github: { owner: me, name: myapp }
+  # Created as a draft, published once every asset is uploaded; true keeps
+  # it a draft (and pushes no formula nor registry entry).
+  draft: false
+  # auto: a semver pre-release (v1.2.0-rc.1) is published as such.
+  prerelease: auto
+  # Replace an asset already uploaded with another content.
+  replace_existing_artifacts: false
+  # true | false | legacy: legacy lets GitHub pick "Latest" by version, so
+  # that a v1.9.1 published after v2.0.0 does not take the label.
+  make_latest: legacy
+  name_template: "{{ .Tag }}"
+  header: ""
+  footer: ""
+
+nfpms:
+  - id: packages
+    builds: [myapp]
+    package_name: myapp
+    formats: [deb, rpm]
+    vendor: me
+    homepage: https://example.com/myapp
+    maintainer: Me <me@example.com>
+    description: |
+      One line summary
+      A longer description, on as many lines as needed.
+    license: MIT
+    section: utils
+    priority: optional
+    bindir: /usr/bin
+    contents:
+      - { src: LICENSE, dst: /usr/share/doc/myapp/LICENSE }
+      # Not silently overwritten on upgrade once edited.
+      - { src: myapp.conf, dst: /etc/myapp/myapp.conf, type: "config|noreplace" }
+    dependencies: ["ca-certificates", "libfoo >= 1.2"]
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+
+brews:
+  - name: myapp
+    # Pushed to that tap once the release is published, with a token that can
+    # write to it (the release's own GITHUB_TOKEN cannot).
+    repository:
+      owner: me
+      name: homebrew-tap
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://example.com/myapp
+    description: One line summary
+    license: MIT
+    install: |
+      bin.install "myapp"
+    test: |
+      system bin/"myapp", "--version"
+    # false | true | auto (not pushed for a pre-release)
+    skip_upload: auto
+
+aqua:
+  - repository:
+      owner: me
+      name: aqua-registry
+      branch: master
+      token: "{{ .Env.AQUA_REGISTRY_TOKEN }}"
+    path: pkgs/me/myapp/registry.yaml
+    description: One line summary
+    skip_upload: auto

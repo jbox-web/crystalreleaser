@@ -305,6 +305,20 @@ describe Crystalreleaser::Validator do
     end
   end
 
+  # The example at the root of the repository is what users copy: it must
+  # stay a configuration crystalreleaser accepts as it is.
+  it "accepts .crystalreleaser.example.yml, with only the warning of the platform this host cannot build" do
+    Fixture.project(config: File.read("#{__DIR__}/../../.crystalreleaser.example.yml")) do |project|
+      project.write("shard.yml", "name: myapp\nversion: 1.0.0\ntargets:\n  myapp:\n    main: src/myapp.cr\n")
+      config = Crystalreleaser::Config.load(project.dir, nil, DARWIN_HOST)
+      result = Crystalreleaser::Validator.new(config, DARWIN_HOST).run
+      result.errors.should be_empty
+      result.warnings.should eq(["builds[0].platforms[3]: native build of darwin/amd64 on a darwin/arm64 host will be skipped"])
+      config.builds.first.docker.packages.should eq(["libxml2-dev", "libxml2-static", "gmp-dev", "gmp-static"])
+      config.archives.map(&.formats).should eq([["tar.gz"], ["binary"]])
+    end
+  end
+
   describe "ids and references" do
     it "rejects duplicate build ids" do
       errors("builds:\n  - id: toy\n    target: toy\n  - id: toy\n    target: toy\n")

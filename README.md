@@ -200,7 +200,9 @@ yet; they are pushed once it is.
 
 ## Configuration
 
-Every top-level key is optional, and so is nearly everything under them: an
+A complete, commented configuration is in
+[`.crystalreleaser.example.yml`](.crystalreleaser.example.yml). Every top-level
+key is optional, and so is nearly everything under them: an
 entry that is written must give `platforms[].os` and `arch`,
 `nfpms[].maintainer`, `aqua[].repository` and `aqua[].path`. Without a config
 file, each target of `shard.yml` is built natively for the host and archived.
