@@ -81,6 +81,20 @@ module Crystalreleaser
           .sub(/(.)@(\d)/, "\\1AT\\2")
       end
 
+      # Whether the formula must say its version. Homebrew reads it from the
+      # download URL, and `brew audit --strict` refuses a `version` that says
+      # the same thing. It reads it right when every archive name holds the
+      # version, or when the version is plain numbers and the tag is that
+      # version (`v1.2.3`); otherwise, a pre-release whose archive names do
+      # not hold it, it reads something else (`64` from `amd64`, observed
+      # with Homebrew 7.0.14), and the line is needed.
+      def self.version_line?(ctx : Context, archives : Array(Artifact)) : Bool
+        version = ctx.version_info.version
+        return false if archives.all?(&.name.includes?(version))
+        tag = ctx.version_info.tag
+        !(version.matches?(/\A\d+(\.\d+)*\z/) && tag.in?(version, "v#{version}"))
+      end
+
       # A Ruby double-quoted string literal. Ruby interpolates `#{...}`, but
       # also `#$global` and `#@ivar` without braces.
       def self.ruby_string(text : String) : String
@@ -99,7 +113,9 @@ module Crystalreleaser
           io << "class " << Homebrew.class_name(brew.name) << " < Formula\n"
           io << "  desc " << Homebrew.ruby_string(brew.description) << '\n' unless brew.description.empty?
           io << "  homepage " << Homebrew.ruby_string(brew.homepage) << '\n' unless brew.homepage.empty?
-          io << "  version " << Homebrew.ruby_string(ctx.version_info.version) << '\n'
+          if Homebrew.version_line?(ctx, archives.values)
+            io << "  version " << Homebrew.ruby_string(ctx.version_info.version) << '\n'
+          end
           io << "  license " << Homebrew.ruby_string(brew.license) << '\n' unless brew.license.empty?
 
           OS_BLOCKS.each do |system, os_block|
@@ -116,7 +132,7 @@ module Crystalreleaser
           end
 
           io << "\n  def install\n" << indent(brew.install.presence || %(bin.install "#{brew.name}")) << "  end\n"
-          io << "\n  test do\n" << indent(brew.test.presence || %(system "\#{bin}/#{brew.name}", "--version")) << "  end\n"
+          io << "\n  test do\n" << indent(brew.test.presence || %(system bin/"#{brew.name}", "--version")) << "  end\n"
           io << "end\n"
         end
       end

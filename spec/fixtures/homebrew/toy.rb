@@ -5,7 +5,6 @@
 class Toy < Formula
   desc "A \"toy\" that prints \#{name}"
   homepage "https://example.com/toy"
-  version "1.2.3-rc.1"
   license "MIT"
 
   on_macos do
@@ -31,6 +30,6 @@ class Toy < Formula
   end
 
   test do
-    system "#{bin}/toy", "--version"
+    system bin/"toy", "--version"
   end
 end

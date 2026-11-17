@@ -122,6 +122,40 @@ describe Crystalreleaser::Pipes::Homebrew do
     end
   end
 
+  # `brew audit --strict` refuses a `version` that Homebrew reads from the
+  # URL as well. It reads it there when the archive name holds it, or when
+  # the version is plain numbers and the tag is that version: a
+  # pre-release whose archive name does not hold it is the one case where
+  # Homebrew reads something else ("64" from amd64), observed with
+  # Homebrew 7.0.14.
+  describe "the version line" do
+    {
+      {"v1.2.3-rc.1", "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"} => false,
+      {"v1.2.3", "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"}                     => false,
+      {"1.2.3", "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"}                      => false,
+      {"v1.2.3-rc.1", "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"}                => true,
+    }.each do |(tag, template), written|
+      it "is #{written ? "" : "not "}written for the tag #{tag} and the archive #{template}" do
+        Fixture.project(config: CONFIG + "\narchives:\n  - id: default\n    name_template: \"#{template}\"\n") do |project|
+          ctx = spec_context(project)
+          ctx.version_info = Crystalreleaser::VersionInfo.release(tag)
+          Dir.mkdir_p(ctx.dist_path)
+          vars = {"ProjectName" => "toy", "Version" => ctx.version_info.version}
+          {"darwin" => "arm64", "linux" => "amd64"}.each do |system, arch|
+            name = Crystalreleaser::Template.render(template, "t", vars.merge({"Os" => system, "Arch" => arch})) + ".tar.gz"
+            artifact = Crystalreleaser::Artifact.new(Crystalreleaser::Artifact::Type::Archive, name, "dist/#{name}",
+              os: system, arch: arch, extra: {"format" => "tar.gz", "binaries" => "toy"})
+            artifact.sha256 = "0" * 64
+            ctx.artifacts.add(artifact)
+          end
+          Crystalreleaser::Pipes::Homebrew.new.run(ctx)
+          formula = File.read(project.path("dist/homebrew/toy.rb"))
+          formula.includes?(%(  version "#{ctx.version_info.version}"\n)).should eq(written)
+        end
+      end
+    end
+  end
+
   it "generates without any request, even when publishing" do
     Fixture.project(config: CONFIG) do |project|
       options = Crystalreleaser::Options.new
@@ -240,7 +274,7 @@ describe Crystalreleaser::Pipes::Homebrew do
       Crystalreleaser::Pipes::Homebrew.new.run(ctx)
       formula = File.read(project.path("dist/homebrew/toy.rb"))
       formula.should contain(%(  def install\n    bin.install "toy"\n  end\n))
-      formula.should contain(%(  test do\n    system "\#{bin}/toy", "--version"\n  end\n))
+      formula.should contain(%(  test do\n    system bin/"toy", "--version"\n  end\n))
     end
   end
 end

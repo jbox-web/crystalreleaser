@@ -117,7 +117,7 @@ brews:
     install: |
       bin.install "ssherlock"
     test: |
-      system "#{bin}/ssherlock", "--version"
+      system bin/"ssherlock", "--version"
 
 aqua:
   - repository:

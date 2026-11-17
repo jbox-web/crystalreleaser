@@ -286,8 +286,8 @@ brews:
     license: MIT
     install: |                      # default: bin.install "<name>"
       bin.install "myapp"
-    test: |                         # default: system "#{bin}/<name>", "--version"
-      system "#{bin}/myapp", "--version"
+    test: |                         # default: system bin/"<name>", "--version"
+      system bin/"myapp", "--version"
     skip_upload: "false"            # false | true | auto: see below
 
 aqua:
@@ -370,7 +370,10 @@ field.
   the same for dpkg; rpm then keeps the edited file and installs the new one
   as `.rpmnew`.
 - **Homebrew**: `on_macos`/`on_linux` × `on_intel`/`on_arm` blocks pointing at
-  the tar.gz assets of the release.
+  the tar.gz assets of the release, written to pass `brew audit --strict`: no
+  `version` line when Homebrew reads the version from the download URL (it
+  is written only for a pre-release whose archive names do not hold the
+  version), and `bin/"name"` in the default test.
 - **aqua**: a `github_release` package whose `asset` template and
   `supported_envs` are derived from the archives actually produced.
 - **skip_upload**, on a `brews` or an `aqua` entry: `false` (default) pushes

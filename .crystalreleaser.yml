@@ -111,7 +111,7 @@ brews:
     install: |
       bin.install "crystalreleaser"
     test: |
-      system "#{bin}/crystalreleaser", "--version"
+      system bin/"crystalreleaser", "--version"
 
 aqua:
   - repository:
