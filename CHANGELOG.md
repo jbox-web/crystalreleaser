@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-17
+
+### Fixed
+
+- `static_libs` puts the formula's `lib/pkgconfig` first in
+  `PKG_CONFIG_PATH` for the build: Crystal declares the OpenSSL API of the
+  version pkg-config reports, which was the OpenSSL Homebrew had linked
+  (openssl@3 on macos-26-intel) rather than the formula whose archives are
+  linked.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added

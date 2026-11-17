@@ -130,7 +130,10 @@ formula statically on the native darwin platforms: their `lib<name>.a` are
 copied from `$(brew --prefix <formula>)/lib` into a folder of their own,
 outside the project, passed first to the linker with an absolute `-L`
 (the macOS linker takes the first folder that holds a library, and has no
-"static for this one only" switch). The build stops before compiling when
+"static for this one only" switch). The formula's `lib/pkgconfig` comes
+first in `PKG_CONFIG_PATH` as well: Crystal declares the API of the OpenSSL
+pkg-config reports, which must be the one linked, not whichever version
+Homebrew has linked on that machine. The build stops before compiling when
 the formula or one of the archives is missing, naming the formula to
 install; there is no fallback to another formula, so that arm64 and amd64
 embed the same library. It is a build setting, not a platform one, for that

@@ -76,6 +76,40 @@ describe Crystalreleaser::Builders::Native do
       end
     end
 
+    # Crystal picks the OpenSSL API it declares from `pkg-config --modversion`
+    # (lib_ssl.cr): pkg-config must find the formula whose archives are
+    # linked, not the one Homebrew happens to have linked (openssl@3 next to
+    # openssl@4 on the macos-26-intel runners).
+    it "puts the formula's pkg-config folder first, so that Crystal declares the API of what it links" do
+      Fixture.project(config: config) do |project|
+        prefix = File.join(project.dir, "fake-homebrew", "openssl@4")
+        host = Crystalreleaser::Host.new("darwin", "amd64", musl: false)
+        ctx = spec_context(project, host, env: {"PATH" => "/usr/bin", "PKG_CONFIG_PATH" => "/usr/local/lib/pkgconfig"})
+        builder = Crystalreleaser::Builders::Native.new(host, ->(_formula : String) { prefix.as(String?) })
+        builder.environment(ctx.config.builds.first, platform("darwin", "amd64"), ctx)["PKG_CONFIG_PATH"]
+          .should eq("#{prefix}/lib/pkgconfig:/usr/local/lib/pkgconfig")
+
+        ctx = spec_context(project, host, env: {"PATH" => "/usr/bin"})
+        builder.environment(ctx.config.builds.first, platform("darwin", "amd64"), ctx)["PKG_CONFIG_PATH"]
+          .should eq("#{prefix}/lib/pkgconfig")
+      end
+    end
+
+    it "leaves PKG_CONFIG_PATH alone without static_libs, and off darwin" do
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n") do |project|
+        host = Crystalreleaser::Host.new("darwin", "amd64", musl: false)
+        ctx = spec_context(project, host, env: {"PKG_CONFIG_PATH" => "/x"})
+        Crystalreleaser::Builders::Native.new(host, ->(_formula : String) { "/never".as(String?) })
+          .environment(ctx.config.builds.first, platform("darwin", "amd64"), ctx)["PKG_CONFIG_PATH"].should eq("/x")
+      end
+      Fixture.project(config: config) do |project|
+        host = Crystalreleaser::Host.new("linux", "amd64", musl: false)
+        ctx = spec_context(project, host, env: {"PKG_CONFIG_PATH" => "/x"})
+        Crystalreleaser::Builders::Native.new(host, ->(_formula : String) { "/never".as(String?) })
+          .environment(ctx.config.builds.first, platform, ctx)["PKG_CONFIG_PATH"].should eq("/x")
+      end
+    end
+
     it "fails before compiling when the formula is not installed, naming it" do
       Fixture.project(config: config) do |project|
         host = Crystalreleaser::Host.new("darwin", "amd64", musl: false)

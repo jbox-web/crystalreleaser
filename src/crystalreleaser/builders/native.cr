@@ -78,6 +78,22 @@ module Crystalreleaser
         args
       end
 
+      # The environment of the compiler. With static_libs on darwin, the
+      # formula's pkg-config folder comes first: Crystal declares the OpenSSL
+      # API of the version `pkg-config --modversion` reports (lib_ssl.cr), and
+      # that must be the formula whose archives are linked, not whichever one
+      # Homebrew has linked (openssl@3 next to openssl@4 on macos-26-intel).
+      def environment(build : Config::Build, platform : Config::Platform, ctx : Context) : Hash(String, String)
+        env = ctx.build_env(build, platform)
+        static = build.static_libs
+        return env unless static && platform.os == "darwin"
+        prefix = @brew_prefix.call(static.formula)
+        return env unless prefix
+        folder = File.join(prefix, "lib", "pkgconfig")
+        env["PKG_CONFIG_PATH"] = env["PKG_CONFIG_PATH"]?.presence.try { |rest| "#{folder}:#{rest}" } || folder
+        env
+      end
+
       def build(build : Config::Build, platform : Config::Platform, ctx : Context) : Path
         static_dir = static_libs_dir(build, platform, ctx)
         args = command(build, platform, ctx, static_dir)
@@ -85,7 +101,7 @@ module Crystalreleaser
         Dir.mkdir_p(File.dirname(output))
         ctx.logger.debug(args.join(' '))
 
-        status, log = Subprocess.run(args[0], args[1..], chdir: ctx.dir, env: ctx.build_env(build, platform),
+        status, log = Subprocess.run(args[0], args[1..], chdir: ctx.dir, env: environment(build, platform, ctx),
           clear_env: true)
         raise BuildError.new("#{label(build, platform)}: #{log.strip}") unless status.success?
         Path[output]
