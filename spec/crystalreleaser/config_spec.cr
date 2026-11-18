@@ -195,6 +195,35 @@ describe Crystalreleaser::Config do
       end
     end
 
+    it "reads static_libs as a list of formulas, in the order they are written, and as empty by default" do
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    static_libs:\n" \
+                              "      - formula: openssl@4\n        libs: [ssl, crypto]\n" \
+                              "      - formula: libssh2\n        libs: [ssh2]\n") do |project|
+        load(project).builds.first.static_libs.map { |entry| {entry.formula, entry.libs} }.should eq([
+          {"openssl@4", ["ssl", "crypto"]},
+          {"libssh2", ["ssh2"]},
+        ])
+      end
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n") do |project|
+        load(project).builds.first.static_libs.should be_empty
+      end
+    end
+
+    # Up to 0.2.1 static_libs was a single mapping: say what to write instead
+    # of YAML's "expected a sequence".
+    it "refuses static_libs written as a single mapping, and says it is a list" do
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    static_libs:\n      formula: openssl@4\n      libs: [ssl]\n") do |project|
+        config_error(project).should eq(".crystalreleaser.yml:4:5: static_libs is a list, one entry per Homebrew formula: " \
+                                        "write `- formula: openssl@4` with its `libs:` under it")
+      end
+    end
+
+    it "names what YAML found in words, not as a Crystal type" do
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    static_libs:\n      - openssl@4\n") do |project|
+        config_error(project).should eq(".crystalreleaser.yml:5:9: Expected mapping, not scalar")
+      end
+    end
+
     it "names a missing key" do
       Fixture.project(config: "aqua:\n  - repository:\n      owner: o\n      name: r\n") do |project|
         config_error(project).should eq(".crystalreleaser.yml:2:5: missing key 'path'")

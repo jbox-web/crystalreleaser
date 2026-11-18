@@ -47,7 +47,63 @@ describe Crystalreleaser::Builders::Native do
   # that name it finds, and has no "static for this one only" switch. The
   # path is absolute: the linker runs in the compiler's cache.
   describe "static_libs on darwin" do
-    config = "builds:\n  - id: toy\n    target: toy\n    static_libs:\n      formula: openssl@4\n      libs: [ssl, crypto]\n"
+    config = "builds:\n  - id: toy\n    target: toy\n    static_libs:\n      - formula: openssl@4\n        libs: [ssl, crypto]\n"
+    two_formulas = config + "      - formula: libssh2\n        libs: [ssh2]\n"
+
+    it "copies the archives of every formula into the same folder, asking Homebrew for each in the order written" do
+      Fixture.project(config: two_formulas) do |project|
+        project.write("fake-homebrew/openssl@4/lib/libssl.a", "ssl archive")
+        project.write("fake-homebrew/openssl@4/lib/libcrypto.a", "crypto archive")
+        project.write("fake-homebrew/libssh2/lib/libssh2.a", "ssh2 archive")
+        host = Crystalreleaser::Host.new("darwin", "arm64", musl: false)
+        ctx = spec_context(project, host)
+        formulas = [] of String
+        builder = Crystalreleaser::Builders::Native.new(host, ->(formula : String) {
+          formulas << formula
+          File.join(project.dir, "fake-homebrew", formula).as(String?)
+        })
+
+        dir = builder.static_libs_dir(ctx.config.builds.first, platform("darwin", "arm64"), ctx).should_not be_nil
+        begin
+          formulas.should eq(["openssl@4", "libssh2"])
+          Dir.children(dir).sort.should eq(["libcrypto.a", "libssh2.a", "libssl.a"])
+          File.read(File.join(dir, "libssh2.a")).should eq("ssh2 archive")
+        ensure
+          FileUtils.rm_rf(dir)
+        end
+      end
+    end
+
+    it "puts the pkg-config folder of every formula first, in the order written" do
+      Fixture.project(config: two_formulas) do |project|
+        homebrew = File.join(project.dir, "fake-homebrew")
+        host = Crystalreleaser::Host.new("darwin", "amd64", musl: false)
+        ctx = spec_context(project, host, env: {"PATH" => "/usr/bin", "PKG_CONFIG_PATH" => "/usr/local/lib/pkgconfig"})
+        builder = Crystalreleaser::Builders::Native.new(host, ->(formula : String) { File.join(homebrew, formula).as(String?) })
+        builder.environment(ctx.config.builds.first, platform("darwin", "amd64"), ctx)["PKG_CONFIG_PATH"]
+          .should eq("#{homebrew}/openssl@4/lib/pkgconfig:#{homebrew}/libssh2/lib/pkgconfig:/usr/local/lib/pkgconfig")
+      end
+    end
+
+    it "names the formula that is not installed when another one is" do
+      Fixture.project(config: two_formulas) do |project|
+        project.write("fake-homebrew/openssl@4/lib/libssl.a", "ssl archive")
+        project.write("fake-homebrew/openssl@4/lib/libcrypto.a", "crypto archive")
+        host = Crystalreleaser::Host.new("darwin", "arm64", musl: false)
+        ctx = spec_context(project, host)
+        builder = Crystalreleaser::Builders::Native.new(host, ->(formula : String) {
+          formula == "openssl@4" ? File.join(project.dir, "fake-homebrew", formula).as(String?) : nil.as(String?)
+        })
+        folders = Dir.glob(File.join(Dir.tempdir, "crystalreleaser-static-toy-*"))
+        expect_raises(Crystalreleaser::BuildError,
+          "toy darwin/arm64: static_libs: Homebrew has no libssh2 installed; install it with `brew install libssh2`") do
+          builder.static_libs_dir(ctx.config.builds.first, platform("darwin", "arm64"), ctx)
+        end
+        # The first formula was there: its archives must not have been
+        # copied into a folder nothing would remove.
+        Dir.glob(File.join(Dir.tempdir, "crystalreleaser-static-toy-*")).should eq(folders)
+      end
+    end
 
     it "copies lib<name>.a of the formula into a folder outside the project, first on the linker's path" do
       Fixture.project(config: config) do |project|

@@ -8,12 +8,13 @@ module Crystalreleaser
     # `crystal build` on the host itself. Only builds for the host platform;
     # static only on a musl host, since glibc cannot be linked statically.
     #
-    # On darwin, `static_libs` links the listed libraries of a Homebrew
-    # formula statically: their `.a` files are copied into a folder of their
-    # own, outside the project, passed first to the linker by an absolute
-    # `-L` (the linker runs in the compiler's cache). ld64 has no "static for
-    # this library only" switch: it takes the first folder of its search path
-    # that holds the library, and that folder holds nothing but the `.a`.
+    # On darwin, `static_libs` links the listed libraries of Homebrew
+    # formulas statically: their `.a` files are copied into one folder of
+    # their own, outside the project, passed first to the linker by an
+    # absolute `-L` (the linker runs in the compiler's cache). ld64 has no
+    # "static for this library only" switch: it takes the first folder of its
+    # search path that holds the library, and that folder holds nothing but
+    # the `.a`.
     class Native < Builder
       # Where Homebrew keeps a formula, or nil when it is not installed.
       alias BrewPrefix = Proc(String, String?)
@@ -43,23 +44,30 @@ module Crystalreleaser
       # The folder of the static libraries of a darwin build, filled, or nil
       # when there are none to link. The caller removes it.
       def static_libs_dir(build : Config::Build, platform : Config::Platform, ctx : Context) : String?
-        static = build.static_libs
-        return unless static && platform.os == "darwin"
+        return if build.static_libs.empty? || platform.os != "darwin"
+        # Every formula and every archive is checked before the folder exists:
+        # a missing one must not leave a half-filled folder behind.
+        archives = build.static_libs.flat_map { |static| static_archives(static, build, platform) }
+        dir = File.join(Dir.tempdir, "crystalreleaser-static-#{build.id.gsub(/[^a-zA-Z0-9_.-]/, '_')}-#{Random::Secure.hex(6)}")
+        Dir.mkdir_p(dir)
+        archives.each { |archive| FileUtils.cp(archive, File.join(dir, File.basename(archive))) }
+        File.realpath(dir)
+      end
+
+      # The `lib<name>.a` of one formula, which must be installed and hold
+      # each of them.
+      private def static_archives(static : Config::StaticLibs, build : Config::Build, platform : Config::Platform) : Array(String)
         formula = static.formula
         prefix = @brew_prefix.call(formula) ||
                  raise BuildError.new("#{label(build, platform)}: static_libs: Homebrew has no #{formula} installed; " \
                                       "install it with `brew install #{formula}`")
-        archives = static.libs.map do |name|
+        static.libs.map do |name|
           archive = File.join(prefix, "lib", "lib#{name}.a")
           unless File.file?(archive)
             raise BuildError.new("#{label(build, platform)}: static_libs: #{formula} has no lib#{name}.a in #{prefix}/lib")
           end
           archive
         end
-        dir = File.join(Dir.tempdir, "crystalreleaser-static-#{build.id.gsub(/[^a-zA-Z0-9_.-]/, '_')}-#{Random::Secure.hex(6)}")
-        Dir.mkdir_p(dir)
-        archives.each { |archive| FileUtils.cp(archive, File.join(dir, File.basename(archive))) }
-        File.realpath(dir)
       end
 
       def command(build : Config::Build, platform : Config::Platform, ctx : Context,
@@ -79,18 +87,20 @@ module Crystalreleaser
       end
 
       # The environment of the compiler. With static_libs on darwin, the
-      # formula's pkg-config folder comes first: Crystal declares the OpenSSL
-      # API of the version `pkg-config --modversion` reports (lib_ssl.cr), and
-      # that must be the formula whose archives are linked, not whichever one
-      # Homebrew has linked (openssl@3 next to openssl@4 on macos-26-intel).
+      # pkg-config folder of each formula comes first, in the order they are
+      # written: Crystal declares the OpenSSL API of the version `pkg-config
+      # --modversion` reports (lib_ssl.cr), and that must be the formula whose
+      # archives are linked, not whichever one Homebrew has linked (openssl@3
+      # next to openssl@4 on macos-26-intel).
       def environment(build : Config::Build, platform : Config::Platform, ctx : Context) : Hash(String, String)
         env = ctx.build_env(build, platform)
-        static = build.static_libs
-        return env unless static && platform.os == "darwin"
-        prefix = @brew_prefix.call(static.formula)
-        return env unless prefix
-        folder = File.join(prefix, "lib", "pkgconfig")
-        env["PKG_CONFIG_PATH"] = env["PKG_CONFIG_PATH"]?.presence.try { |rest| "#{folder}:#{rest}" } || folder
+        return env unless platform.os == "darwin"
+        folders = build.static_libs.compact_map do |static|
+          @brew_prefix.call(static.formula).try { |prefix| File.join(prefix, "lib", "pkgconfig") }
+        end
+        return env if folders.empty?
+        env["PKG_CONFIG_PATH"]?.presence.try { |rest| folders << rest }
+        env["PKG_CONFIG_PATH"] = folders.join(':')
         env
       end
 

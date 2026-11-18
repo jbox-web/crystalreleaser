@@ -20,8 +20,8 @@ builds:
     # arm64 and amd64: they then only depend on libraries macOS ships, which
     # the build checks with otool. The runners install the formula first.
     static_libs:
-      formula: openssl@4
-      libs: [ssl, crypto]
+      - formula: openssl@4
+        libs: [ssl, crypto]
     platforms:
       - os: linux
         arch: amd64

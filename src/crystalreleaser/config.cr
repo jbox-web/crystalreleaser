@@ -82,7 +82,8 @@ module Crystalreleaser
     end
 
     # Libraries of a Homebrew formula a native darwin build links
-    # statically: `libs` are their names as for -l (ssl for libssl.a).
+    # statically: `libs` are their names as for -l (ssl for libssl.a). One
+    # entry of a build's `static_libs` list.
     class StaticLibs
       include YAML::Serializable
       include YAML::Serializable::Strict
@@ -111,9 +112,10 @@ module Crystalreleaser
       property platforms : Array(Platform) = [] of Platform
       property docker : Docker = Docker.new
       property cross : Cross = Cross.new
-      # On the build, not on a platform: arm64 and amd64 must embed the same
-      # library, which one formula for both is what guarantees.
-      property static_libs : StaticLibs? = nil
+      # One entry per Homebrew formula. On the build, not on a platform: arm64
+      # and amd64 must embed the same libraries, which the same formulas for
+      # both is what guarantees.
+      property static_libs : Array(StaticLibs) = [] of StaticLibs
 
       def initialize(@id : String = "", @target : String? = nil)
       end
@@ -379,10 +381,36 @@ module Crystalreleaser
       documents = YAML::Nodes.parse_all(content)
       raise ConfigError.new("#{file}: only one YAML document is allowed") if documents.size > 1
       documents.each { |document| check_duplicate_keys(document, file) }
+      documents.each { |document| check_static_libs_shape(document, file) }
       from_yaml(content)
     rescue error : YAML::ParseException
       error = inner_error(error, content) || error
       raise ConfigError.new("#{file}:#{error.line_number}:#{error.column_number}: #{describe(error)}")
+    end
+
+    # Up to 0.2.1 `static_libs` was the mapping of a single formula. YAML only
+    # says "Expected sequence, not mapping" about it: say what to write.
+    private def self.check_static_libs_shape(document : YAML::Nodes::Document, file : String) : Nil
+      root = document.nodes.first?
+      return unless root.is_a?(YAML::Nodes::Mapping)
+      builds = mapping_value(root, "builds").try(&.[1])
+      return unless builds.is_a?(YAML::Nodes::Sequence)
+      builds.nodes.each do |build|
+        next unless build.is_a?(YAML::Nodes::Mapping)
+        key, value = mapping_value(build, "static_libs") || next
+        next unless value.is_a?(YAML::Nodes::Mapping)
+        formula = mapping_value(value, "formula").try(&.[1]).as?(YAML::Nodes::Scalar).try(&.value) || "<formula>"
+        raise ConfigError.new("#{file}:#{key.start_line}:#{key.start_column}: static_libs is a list, one entry per " \
+                              "Homebrew formula: write `- formula: #{formula}` with its `libs:` under it")
+      end
+    end
+
+    # The key node and the value node of a key of a mapping.
+    private def self.mapping_value(mapping : YAML::Nodes::Mapping, name : String) : {YAML::Nodes::Node, YAML::Nodes::Node}?
+      mapping.nodes.each_slice(2) do |(key, value)|
+        return {key, value} if key.is_a?(YAML::Nodes::Scalar) && key.value == name
+      end
+      nil
     end
 
     # The strict mode refuses unknown keys but not a key written twice: the
@@ -442,7 +470,8 @@ module Crystalreleaser
       elsif match = message.match(/\AMissing ya?ml attribute: (.+)\z/i)
         "missing key '#{match[1]}'"
       else
-        message
+        # "Expected mapping, not YAML::Nodes::Scalar": name the node in words.
+        message.gsub(/YAML::Nodes::(\w+)/) { $1.downcase }
       end
     end
 

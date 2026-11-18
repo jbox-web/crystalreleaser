@@ -323,24 +323,71 @@ describe Crystalreleaser::Validator do
     darwin = "      - os: darwin\n        arch: arm64\n"
 
     it "accepts a formula and its libraries on a build with a native darwin platform" do
-      errors(build_with(darwin, "    static_libs:\n      formula: openssl@4\n      libs: [ssl, crypto]\n"), DARWIN_HOST).should be_empty
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl, crypto]\n"), DARWIN_HOST).should be_empty
     end
 
-    it "warns that nothing uses it when the build has no native darwin platform" do
+    it "accepts several formulas" do
+      result = validate(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl, crypto]\n" \
+                                           "      - formula: libssh2\n        libs: [ssh2]\n"), DARWIN_HOST)
+      result.errors.should be_empty
+      result.warnings.should be_empty
+    end
+
+    it "warns once that nothing uses it when the build has no native darwin platform" do
       warnings(build_with("      - os: linux\n        arch: amd64\n        strategy: docker\n        static: true\n",
-        "    static_libs:\n      formula: openssl@4\n      libs: [ssl]\n")).should eq([
+        "    static_libs:\n      - formula: openssl@4\n        libs: [ssl]\n      - formula: libssh2\n        libs: [ssh2]\n")).should eq([
         "builds[0].static_libs: only native darwin builds use it, and this build has none",
       ])
     end
 
-    it "rejects an empty formula or library list, and file names instead of library names" do
-      errors(build_with(darwin, "    static_libs:\n      formula: \"\"\n      libs: []\n"), DARWIN_HOST).should eq([
-        %(builds[0].static_libs.formula: "" is not a Homebrew formula name),
-        "builds[0].static_libs.libs: at least one library is required",
+    it "rejects an empty formula or library list, and file names instead of library names, naming the entry" do
+      errors(build_with(darwin, "    static_libs:\n      - formula: \"\"\n        libs: []\n"), DARWIN_HOST).should eq([
+        %(builds[0].static_libs[0].formula: "" is not a Homebrew formula name),
+        "builds[0].static_libs[0].libs: at least one library is required",
       ])
-      errors(build_with(darwin, "    static_libs:\n      formula: openssl@4\n      libs: [libssl, crypto.a]\n"), DARWIN_HOST).should eq([
-        %(builds[0].static_libs.libs[0]: "libssl" is a file name: write the library name, as for -l (ssl for libssl.a)),
-        %(builds[0].static_libs.libs[1]: "crypto.a" is a file name: write the library name, as for -l (ssl for libssl.a)),
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl]\n" \
+                                "      - formula: libssh2\n        libs: [libssh2, ssh2.a]\n"), DARWIN_HOST).should eq([
+        %(builds[0].static_libs[1].libs[0]: "libssh2" is a file name: write the library name, as for -l (ssl for libssl.a)),
+        %(builds[0].static_libs[1].libs[1]: "ssh2.a" is a file name: write the library name, as for -l (ssl for libssl.a)),
+      ])
+    end
+
+    it "rejects a formula written twice" do
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl]\n" \
+                                "      - formula: openssl@4\n        libs: [crypto]\n"), DARWIN_HOST).should eq([
+        "builds[0].static_libs[1].formula: openssl@4 is already static_libs[0]: list all its libraries there",
+      ])
+    end
+
+    it "says a library is written twice when both are in the same entry" do
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl, crypto, ssl]\n"), DARWIN_HOST).should eq([
+        "builds[0].static_libs[0].libs[2]: ssl is written twice",
+      ])
+    end
+
+    # The default macOS file system ignores case: libSSL.a and libssl.a are
+    # one file in the folder the archives are copied to.
+    it "rejects a library taken from two formulas under another case" do
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl]\n" \
+                                "      - formula: openssl@3\n        libs: [SSL]\n"), DARWIN_HOST).should eq([
+        "builds[0].static_libs[1].libs[0]: SSL is already taken from openssl@4 (static_libs[0])",
+      ])
+    end
+
+    it "reports a file name once per entry, not as a library taken twice as well" do
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [libz]\n" \
+                                "      - formula: openssl@3\n        libs: [libz]\n"), DARWIN_HOST).should eq([
+        %(builds[0].static_libs[0].libs[0]: "libz" is a file name: write the library name, as for -l (ssl for libssl.a)),
+        %(builds[0].static_libs[1].libs[0]: "libz" is a file name: write the library name, as for -l (ssl for libssl.a)),
+      ])
+    end
+
+    # Every archive lands in the same folder, under lib<name>.a: the second
+    # one would silently replace the first.
+    it "rejects a library taken from two formulas" do
+      errors(build_with(darwin, "    static_libs:\n      - formula: openssl@4\n        libs: [ssl, crypto]\n" \
+                                "      - formula: openssl@3\n        libs: [z, crypto]\n"), DARWIN_HOST).should eq([
+        "builds[0].static_libs[1].libs[1]: crypto is already taken from openssl@4 (static_libs[0])",
       ])
     end
   end

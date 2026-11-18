@@ -74,16 +74,17 @@ builds:
       # Runs `shards install` in the container before compiling.
       shards_install: true
 
-    # The native darwin builds link these libraries of a Homebrew formula
-    # statically: their .a files are copied out of $(brew --prefix <formula>)
-    # and put first on the linker's path. Without it, Crystal links the
-    # formula's .dylib, and the binary only starts on a Mac that has it at the
-    # same path; every darwin build fails when its binary depends on a
-    # library outside /usr/lib and /System/Library. The same formula on both
-    # architectures: install it on every Mac that builds (brew install).
+    # The native darwin builds link these libraries of Homebrew formulas
+    # statically, one entry per formula: their .a files are copied out of
+    # $(brew --prefix <formula>) and put first on the linker's path. Without
+    # it, Crystal links the formula's .dylib, and the binary only starts on a
+    # Mac that has it at the same path; every darwin build fails when its
+    # binary depends on a library outside /usr/lib and /System/Library. The
+    # same formulas on both architectures: install them on every Mac that
+    # builds (brew install).
     static_libs:
-      formula: openssl@4
-      libs: [ssl, crypto]
+      - formula: openssl@4
+        libs: [ssl, crypto]
 
     cross:
       # zig, or cc (clang, or the cross gcc of the target).

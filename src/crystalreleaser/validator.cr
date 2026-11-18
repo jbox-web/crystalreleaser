@@ -139,7 +139,7 @@ module Crystalreleaser
           @errors << "#{field}.cross.linker: unknown linker '#{build.cross.linker}' (expected zig or cc)"
         end
         check_build_source(build, field)
-        build.static_libs.try { |static| check_static_libs(build, static, field) }
+        check_static_libs(build, field)
         check_platforms(build, field)
         check_env_list(build.env, "#{field}.env", PLATFORM_VARS)
         check_docker(build.docker, field, build.platforms.any? { |platform| platform.strategy == "docker" })
@@ -178,17 +178,33 @@ module Crystalreleaser
       end
     end
 
-    private def check_static_libs(build : Config::Build, static : Config::StaticLibs, field : String) : Nil
-      unless static.formula.matches?(/\A[a-z0-9][a-z0-9@+._\/-]*\z/)
-        @errors << "#{field}.static_libs.formula: #{static.formula.inspect} is not a Homebrew formula name"
-      end
-      @errors << "#{field}.static_libs.libs: at least one library is required" if static.libs.empty?
-      static.libs.each_with_index do |name, index|
-        if name.starts_with?("lib") || name.ends_with?(".a") || name.ends_with?(".dylib")
-          @errors << "#{field}.static_libs.libs[#{index}]: #{name.inspect} is a file name: write the library name, " \
-                     "as for -l (ssl for libssl.a)"
-        elsif !name.matches?(/\A[A-Za-z0-9_+.-]+\z/)
-          @errors << "#{field}.static_libs.libs[#{index}]: #{name.inspect} is not a library name"
+    private def check_static_libs(build : Config::Build, field : String) : Nil
+      return if build.static_libs.empty?
+      # Where each formula and each library was first written: the archives
+      # of every formula land in one folder, under lib<name>.a, so a second
+      # library of the same name would silently replace the first.
+      formulas = {} of String => Int32
+      libraries = {} of String => {String, Int32}
+      build.static_libs.each_with_index do |static, index|
+        entry = "#{field}.static_libs[#{index}]"
+        if first = formulas[static.formula]?
+          @errors << "#{entry}.formula: #{static.formula} is already static_libs[#{first}]: list all its libraries there"
+          next
+        end
+        formulas[static.formula] = index
+        check_static_entry(static, entry)
+        static.libs.each_with_index do |name, position|
+          # A name check_static_entry refused has its error already. The
+          # default macOS file system ignores case: libSSL.a is libssl.a.
+          next unless library_name?(name)
+          taken = libraries[name.downcase]?
+          if taken.nil?
+            libraries[name.downcase] = {static.formula, index}
+          elsif taken[1] == index
+            @errors << "#{entry}.libs[#{position}]: #{name} is written twice"
+          else
+            @errors << "#{entry}.libs[#{position}]: #{name} is already taken from #{taken[0]} (static_libs[#{taken[1]}])"
+          end
         end
       end
       # Ignored elsewhere: the linux builds are static already, and a cross
@@ -196,6 +212,31 @@ module Crystalreleaser
       unless build.platforms.any? { |platform| platform.os == "darwin" && platform.strategy == "native" }
         @warnings << "#{field}.static_libs: only native darwin builds use it, and this build has none"
       end
+    end
+
+    # One formula of static_libs and the names of its libraries.
+    private def check_static_entry(static : Config::StaticLibs, entry : String) : Nil
+      unless static.formula.matches?(/\A[a-z0-9][a-z0-9@+._\/-]*\z/)
+        @errors << "#{entry}.formula: #{static.formula.inspect} is not a Homebrew formula name"
+      end
+      @errors << "#{entry}.libs: at least one library is required" if static.libs.empty?
+      static.libs.each_with_index do |name, index|
+        if file_name?(name)
+          @errors << "#{entry}.libs[#{index}]: #{name.inspect} is a file name: write the library name, " \
+                     "as for -l (ssl for libssl.a)"
+        elsif !library_name?(name)
+          @errors << "#{entry}.libs[#{index}]: #{name.inspect} is not a library name"
+        end
+      end
+    end
+
+    # libssl, ssl.a, ssl.dylib: the file, where the name as for -l is wanted.
+    private def file_name?(name : String) : Bool
+      name.starts_with?("lib") || name.ends_with?(".a") || name.ends_with?(".dylib")
+    end
+
+    private def library_name?(name : String) : Bool
+      !file_name?(name) && name.matches?(/\A[A-Za-z0-9_+.-]+\z/)
     end
 
     private def check_build_source(build : Config::Build, field : String) : Nil

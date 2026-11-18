@@ -5,7 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-18
+
+### Changed
+
+- **Breaking:** `static_libs` is a list, one entry per Homebrew formula, so
+  that a build can link the libraries of several formulas statically
+  (`openssl@4` and `libssh2`). The single mapping of 0.2.x is refused with
+  the line to write instead: turn `formula:` and `libs:` into the first
+  entry of the list (`- formula: openssl@4`). The `lib/pkgconfig` of every
+  formula comes first in `PKG_CONFIG_PATH`, in the order they are written,
+  and `check` refuses a formula written twice, and a library written twice
+  or taken from two formulas.
 
 ### Fixed
 

@@ -98,7 +98,7 @@ appear on its command line.
 
 | Strategy | What runs | Platforms | Limits |
 |---|---|---|---|
-| `native` | `crystal build` on the host | the host's own os/arch | Skipped (with a warning) on any other host. `static: true` needs a musl host (Alpine): glibc cannot be linked statically, and macOS has no static linking at all. On darwin, `static_libs` links the libraries of a Homebrew formula statically, and the build fails when the binary still depends on a library macOS does not ship (see below). |
+| `native` | `crystal build` on the host | the host's own os/arch | Skipped (with a warning) on any other host. `static: true` needs a musl host (Alpine): glibc cannot be linked statically, and macOS has no static linking at all. On darwin, `static_libs` links the libraries of Homebrew formulas statically, and the build fails when the binary still depends on a library macOS does not ship (see below). |
 | `docker` | `crystal build` in a Crystal image, with `--static` when the platform says `static: true`: by default an image built on Alpine with Alpine's own Crystal (see below), or the project's Dockerfile, or a given image | linux/amd64, linux/arm64 | In an Alpine image, set `static: true`: a dynamic musl binary runs on no glibc distribution (`check` warns about it). Needs docker; the other architecture runs under QEMU and needs binfmt (`docker run --privileged --rm tonistiigi/binfmt --install arm64`). Emulated builds run one at a time. |
 | `cross` | `crystal build --cross-compile`, then `zig cc` against a sysroot (or, with `linker: cc`, `cc --target` when `cc` is clang and `<triple>-gcc` when it is gcc) | any target with a sysroot | The sysroot must hold the target's static libraries (libgc, pcre2, libyaml, openssl...). crystalreleaser does not provide it; it fails if it is missing. |
 
@@ -125,21 +125,29 @@ it through pkg-config and links its `.dylib`, so the binary only starts on a
 Mac that has the very same OpenSSL at the very same path, and two runners
 may well not even have the same major version.
 
-`static_libs`, on a build, links the listed libraries of one Homebrew
-formula statically on the native darwin platforms: their `lib<name>.a` are
-copied from `$(brew --prefix <formula>)/lib` into a folder of their own,
-outside the project, passed first to the linker with an absolute `-L`
-(the macOS linker takes the first folder that holds a library, and has no
-"static for this one only" switch). The formula's `lib/pkgconfig` comes
-first in `PKG_CONFIG_PATH` as well: Crystal declares the API of the OpenSSL
-pkg-config reports, which must be the one linked, not whichever version
-Homebrew has linked on that machine. The build stops before compiling when
-the formula or one of the archives is missing, naming the formula to
-install; there is no fallback to another formula, so that arm64 and amd64
-embed the same library. It is a build setting, not a platform one, for that
-same reason; on the other platforms it does nothing (the linux builds are
-static already), and `check` warns when the build has no native darwin
-platform at all.
+`static_libs`, on a build, links the listed libraries of Homebrew formulas
+statically on the native darwin platforms. It is a list, one entry per
+formula: a project that links OpenSSL and libssh2 writes two. Their
+`lib<name>.a` are copied from `$(brew --prefix <formula>)/lib` into one
+folder of their own, outside the project, passed first to the linker with an
+absolute `-L` (the macOS linker takes the first folder that holds a library,
+and has no "static for this one only" switch). The `lib/pkgconfig` of each
+formula comes first in `PKG_CONFIG_PATH` as well, in the order they are
+written: Crystal declares the API of the OpenSSL pkg-config reports, which
+must be the one linked, not whichever version Homebrew has linked on that
+machine. The build stops before compiling when a formula or one of the
+archives is missing, naming the formula to install; there is no fallback to
+another formula, so that arm64 and amd64 embed the same libraries. It is a
+build setting, not a platform one, for that same reason; on the other
+platforms it does nothing (the linux builds are static already), and `check`
+warns when the build has no native darwin platform at all. `check` refuses a
+formula written twice, and a library taken from two formulas: both archives
+would land under the same name.
+
+A formula that itself depends on another Homebrew library needs that one
+listed too, or the binary still loads its `.dylib` and fails the `otool -L`
+check: Homebrew's libssh2 is built against `openssl@4`, so linking it
+statically takes both entries.
 
 The docker strategy runs as the calling user (dist/ is not left to root),
 mounts the project at `/src`, and keeps the compiler cache and `lib/` in
@@ -268,8 +276,10 @@ builds:
       sysroot: /opt/sysroots/{{ .Os }}-{{ .Arch }}
       link_flags: []
     static_libs:                    # native darwin builds: see below
-      formula: openssl@4            # the Homebrew formula, on every Mac that builds
-      libs: [ssl, crypto]           # names as for -l: libssl.a, libcrypto.a
+      - formula: openssl@4          # a Homebrew formula, on every Mac that builds
+        libs: [ssl, crypto]         # names as for -l: libssl.a, libcrypto.a
+      - formula: libssh2            # one entry per formula
+        libs: [ssh2]
 
 archives:
   - id: default
