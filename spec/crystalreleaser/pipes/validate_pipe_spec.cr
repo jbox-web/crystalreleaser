@@ -126,6 +126,108 @@ describe Crystalreleaser::Pipes::Validate do
     end
   end
 
+  describe "the key of signed .rpm packages, checked before any build" do
+    signed = "nfpms:\n  - maintainer: J <j@example.com>\n    rpm:\n      signature:\n" \
+             "        key: \"{{ .Env.RPM_SIGNING_KEY }}\"\n        passphrase: \"{{ .Env.RPM_SIGNING_PASSPHRASE }}\"\n"
+    # A release that builds its packages and publishes nothing: no token is
+    # asked for, so what fails below is the signature alone.
+    options = publishing_options(skip: ["publish"])
+    validate = Crystalreleaser::Pipes::Validate.new
+    fixtures = File.join(__DIR__, "../../fixtures/gpg")
+    rsa_key = File.read(File.join(fixtures, "rsa-secret.asc"))
+
+    it "fails when the variable of the key is not set" do
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options, env: {"RPM_SIGNING_PASSPHRASE" => "p"})
+        expect_raises(Crystalreleaser::TemplateError, "nfpms[0].rpm.signature.key: environment variable RPM_SIGNING_KEY is not set") do
+          validate.run(ctx)
+        end
+      end
+    end
+
+    it "fails when the key renders empty" do
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options, env: {"RPM_SIGNING_KEY" => "\n", "RPM_SIGNING_PASSPHRASE" => "p"})
+        expect_raises(Crystalreleaser::ConfigError, "nfpms[0].rpm.signature.key: the key is empty") do
+          validate.run(ctx)
+        end
+      end
+    end
+
+    it "fails when the variable of the passphrase is not set" do
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options, env: {"RPM_SIGNING_KEY" => "k"})
+        expect_raises(Crystalreleaser::TemplateError,
+          "nfpms[0].rpm.signature.passphrase: environment variable RPM_SIGNING_PASSPHRASE is not set") do
+          validate.run(ctx)
+        end
+      end
+    end
+
+    it "fails when gpg is not installed" do
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options, env: {"RPM_SIGNING_KEY" => "k", "RPM_SIGNING_PASSPHRASE" => "p"})
+        expect_raises(Crystalreleaser::ConfigError,
+          "nfpms[0].rpm.signature: gpg is required to sign the .rpm packages, and no-such-gpg was not found") do
+          Crystalreleaser::Pipes::Validate.new(gpg: "no-such-gpg").run(ctx)
+        end
+      end
+    end
+
+    it "passes with a key gpg can sign with" do
+      pending_tool!("gpg")
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options,
+          env: {"RPM_SIGNING_KEY" => rsa_key, "RPM_SIGNING_PASSPHRASE" => "crystalreleaser-spec"})
+        validate.run(ctx).should be_nil
+      end
+    end
+
+    # What a secret pasted wrong looks like: found here, not once every
+    # binary is built.
+    it "fails when the key is not a private key" do
+      pending_tool!("gpg")
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options,
+          env: {"RPM_SIGNING_KEY" => File.read(File.join(fixtures, "rsa-public.asc")), "RPM_SIGNING_PASSPHRASE" => "p"})
+        expect_raises(Crystalreleaser::ConfigError, "nfpms[0].rpm.signature: the signing key holds no private key") do
+          validate.run(ctx)
+        end
+      end
+    end
+
+    it "fails when the passphrase does not unlock the key" do
+      pending_tool!("gpg")
+      Fixture.project(config: signed) do |project|
+        ctx = spec_context(project, options: options, env: {"RPM_SIGNING_KEY" => rsa_key, "RPM_SIGNING_PASSPHRASE" => "wrong"})
+        error = expect_raises(Crystalreleaser::ConfigError, "nfpms[0].rpm.signature: gpg could not sign") do
+          validate.run(ctx)
+        end
+        error.message.to_s.should_not contain("wrong")
+      end
+    end
+
+    # Each run below passes without the key, which the first example shows
+    # is refused otherwise: because of the exemption, not for lack of a check.
+    it "asks nothing in a snapshot, when the packages are skipped, or of an entry without .rpm" do
+      Fixture.project(config: signed) do |project|
+        {publishing_options(snapshot: true), publishing_options(skip: ["publish", "nfpm"])}.each do |exempted|
+          Crystalreleaser::Pipes::Validate.new(gpg: "no-such-gpg").run(spec_context(project, options: exempted)).should be_nil
+        end
+      end
+      Fixture.project(config: signed.sub("    rpm:\n", "    formats: [deb]\n    rpm:\n")) do |project|
+        Crystalreleaser::Pipes::Validate.new(gpg: "no-such-gpg").run(spec_context(project, options: options)).should be_nil
+      end
+    end
+
+    # `build`, and each `build --split` of a split release, write no package.
+    it "asks nothing of a command that only builds" do
+      Fixture.project(config: signed) do |project|
+        Crystalreleaser::Pipes::Validate.new(gpg: "no-such-gpg").run(spec_context(project)).should be_nil
+      end
+    end
+  end
+
   # Still validated: the warning of the config is logged in both cases, so
   # the run did not simply return.
   it "does not need a token for a snapshot or when publishing is skipped" do

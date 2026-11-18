@@ -19,6 +19,36 @@ private def parts(path : String)
   File.open(path) { |file| Rpm.read(file) }
 end
 
+# An OpenPGP signature packet cut after its fixed fields: old-format header
+# (tag 2, one length byte), then version, signature type, public-key
+# algorithm and hash algorithm (RFC 4880, 5.2.3).
+private def signature_packet(version : Int, pubkey_algo : Int) : Bytes
+  Bytes[0x88, 0x04, version, 0x00, pubkey_algo, 0x08]
+end
+
+# The architecture of this machine, which is also the one of its docker
+# daemon: rpm refuses to install a package built for another one.
+private HOST_ARCH = {% if flag?(:aarch64) %}"arm64"{% else %}"amd64"{% end %}
+
+# A package signed by gpg with the test key `name` (spec/fixtures/gpg), next
+# to that key's public half as `key.asc`. Yields the directory holding both.
+private def with_signed_rpm(name : String, passphrase : String = "", & : String ->) : Nil
+  dir = File.join(Dir.tempdir, "crystalreleaser-rpm-#{Random::Secure.hex(6)}")
+  begin
+    spec = sample_package(dir)
+    spec.arch = HOST_ARCH
+    spec.dependencies = [] of String
+    File.copy(File.join(__DIR__, "../../fixtures/gpg/#{name}-public.asc"), File.join(dir, "key.asc"))
+    key = File.read(File.join(__DIR__, "../../fixtures/gpg/#{name}-secret.asc"))
+    Crystalreleaser::Gpg.open(key, passphrase) do |gpg|
+      File.open(File.join(dir, "toy.rpm"), "w") { |file| Rpm.write(file, spec, ->(data : Bytes) { gpg.sign(data) }) }
+    end
+    yield dir
+  ensure
+    FileUtils.rm_rf(dir)
+  end
+end
+
 describe Crystalreleaser::Formats::Rpm do
   it "starts with a 96-byte v3 lead naming the package" do
     with_rpm do |path|
@@ -49,6 +79,63 @@ describe Crystalreleaser::Formats::Rpm do
       header[Tag::PAYLOADDIGESTALGO].should eq([8])
       header[Tag::PAYLOADDIGEST].should eq([Digest::SHA256.hexdigest(payload)])
       header[Tag::PAYLOADDIGESTALT].should eq([Digest::SHA256.hexdigest(uncompressed)])
+    end
+  end
+
+  it "carries no OpenPGP signature when none is asked for" do
+    with_rpm do |path|
+      signature = parts(path)[1]
+      signature.has_key?(Tag::SIG_RSA).should be_false
+      signature.has_key?(Tag::SIG_DSA).should be_false
+    end
+  end
+
+  # rpm reads a header-only signature from RSAHEADER (268) when the key is
+  # RSA, and from DSAHEADER (267) for DSA, ECDSA and EdDSA.
+  {
+    {1, 268, "RSA"},
+    {17, 267, "DSA"},
+    {19, 267, "ECDSA"},
+    {22, 267, "EdDSA"},
+  }.each do |(algo, tag, label)|
+    it "stores the #{label} signature of the main header, magic included, under tag #{tag}" do
+      dir = File.join(Dir.tempdir, "crystalreleaser-rpm-#{Random::Secure.hex(6)}")
+      begin
+        spec = sample_package(dir)
+        signed = Bytes.empty
+        packet = signature_packet(4, algo)
+        io = IO::Memory.new
+        Rpm.write(io, spec, ->(data : Bytes) { signed = data.dup; packet })
+
+        _, signature, _, header, _ = Rpm.read(IO::Memory.new(io.to_slice))
+        signature[tag].should eq(packet)
+        signed.should eq(header)
+        signed[0, 8].should eq(Bytes[0x8e, 0xad, 0xe8, 0x01, 0, 0, 0, 0])
+        # The digests of an unsigned package are still there.
+        signature[Tag::SIG_SHA256].should eq(Digest::SHA256.hexdigest(header))
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
+  end
+
+  it "reads the algorithm of a signature packet with a new-format header" do
+    Rpm.signature_tag(Bytes[0xc2, 0x04, 0x04, 0x00, 0x16, 0x0a]).should eq(267)
+    Rpm.signature_tag(Bytes[0xc2, 0x04, 0x04, 0x00, 0x01, 0x08]).should eq(268)
+  end
+
+  it "refuses a signature rpm has no header tag for" do
+    expect_raises(Crystalreleaser::FormatError, "an RPM package cannot hold an OpenPGP v6 signature (v4 only)") do
+      Rpm.signature_tag(signature_packet(6, 1))
+    end
+    expect_raises(Crystalreleaser::FormatError, "an RPM package cannot hold a signature of OpenPGP public-key algorithm 16") do
+      Rpm.signature_tag(signature_packet(4, 16))
+    end
+    expect_raises(Crystalreleaser::FormatError, "not an OpenPGP signature packet") do
+      Rpm.signature_tag(Bytes[0x99, 0x04, 0x04, 0x00, 0x01, 0x08])
+    end
+    expect_raises(Crystalreleaser::FormatError, "not an OpenPGP signature packet") do
+      Rpm.signature_tag(Bytes[0x88])
     end
   end
 
@@ -181,6 +268,54 @@ describe Crystalreleaser::Formats::Rpm do
       info.should match(/^Version\s*: 1\.2\.3~rc\.1$/m)
       run_tool(["rpm", "-qlp", path]).lines.should eq(["/usr/bin/toy", "/usr/share/doc/toy", "/usr/share/doc/toy/LICENSE"])
       run_tool(["rpm", "-K", "--nosignature", path]).should contain("digests OK")
+    end
+  end
+
+  # gpg signs and rpm judges: an RSA key protected by a passphrase, and an
+  # Ed25519 key without one.
+  {
+    {"rsa", "crystalreleaser-spec"},
+    {"ed25519", ""},
+  }.each do |(name, passphrase)|
+    it "has its #{name} signature verified by rpm once the public key is imported" do
+      pending_tool!("gpg")
+      pending_tool!("rpm")
+      with_signed_rpm(name, passphrase) do |dir|
+        db = File.join(dir, "rpmdb")
+        run_tool(["rpm", "--dbpath", db, "--import", File.join(dir, "key.asc")])
+        run_tool(["rpm", "--dbpath", db, "-K", File.join(dir, "toy.rpm")]).should contain("digests signatures OK")
+      end
+    end
+
+    # Fedora's rpm 6 refuses an unsigned package: this is the install the
+    # signature is for. Rocky Linux 9 has the rpm 4.16 of RHEL 9, which reads
+    # the same header tags.
+    {"fedora:latest", "rockylinux:9"}.each do |image|
+      it "installs on #{image} without --nosignature when signed with the #{name} key", tags: "docker" do
+        pending_tool!("gpg")
+        with_signed_rpm(name, passphrase) do |dir|
+          output = run_tool(["docker", "run", "--rm", "--platform", "linux/#{HOST_ARCH}", "-v", "#{dir}:/pkg:ro", image, "sh", "-ec",
+                             "rpm --import /pkg/key.asc; rpm -K /pkg/toy.rpm; rpm -i /pkg/toy.rpm; /usr/bin/toy"])
+          output.should contain("/pkg/toy.rpm: digests signatures OK")
+          output.lines.last.should eq("toy")
+        end
+      end
+    end
+  end
+
+  it "is refused by Fedora's rpm when it is not signed", tags: "docker" do
+    dir = File.join(Dir.tempdir, "crystalreleaser-rpm-#{Random::Secure.hex(6)}")
+    begin
+      spec = sample_package(dir)
+      spec.arch = HOST_ARCH
+      spec.dependencies = [] of String
+      File.open(File.join(dir, "toy.rpm"), "w") { |file| Rpm.write(file, spec) }
+      status, output = Crystalreleaser::Subprocess.run("docker",
+        ["run", "--rm", "--platform", "linux/#{HOST_ARCH}", "-v", "#{dir}:/pkg:ro", "fedora:latest", "rpm", "-i", "/pkg/toy.rpm"])
+      status.success?.should be_false
+      output.should contain("does not verify: no signature")
+    ensure
+      FileUtils.rm_rf(dir)
     end
   end
 end

@@ -14,6 +14,8 @@ module Crystalreleaser
       LinuxPackage
       Formula
       AquaRegistry
+      # The public half of a key packages were signed with.
+      PublicKey
 
       def to_json(json : JSON::Builder) : Nil
         json.string(to_s.underscore)

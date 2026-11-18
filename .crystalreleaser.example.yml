@@ -173,6 +173,16 @@ nfpms:
       - { src: myapp.conf, dst: /etc/myapp/myapp.conf, type: "config|noreplace" }
     dependencies: ["ca-certificates", "libfoo >= 1.2"]
     file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    # Signs the .rpm packages, which rpm 6 (Fedora 43 and later) refuses to
+    # install otherwise, with the gpg of the machine that runs the release.
+    # Both values are secrets of the environment, never written here: the key
+    # is what `gpg --armor --export-secret-keys <id>` prints. The public key
+    # joins the release as RPM-GPG-KEY-<package_name>, for `rpm --import`.
+    rpm:
+      signature:
+        key: "{{ .Env.RPM_SIGNING_KEY }}"
+        # Only for a key protected by a passphrase.
+        passphrase: "{{ .Env.RPM_SIGNING_PASSPHRASE }}"
 
 brews:
   - name: myapp

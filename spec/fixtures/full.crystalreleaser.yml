@@ -102,6 +102,10 @@ nfpms:
         dst: /usr/share/doc/ssherlock/LICENSE
     dependencies: []
     file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    rpm:
+      signature:
+        key: "{{ .Env.RPM_SIGNING_KEY }}"
+        passphrase: "{{ .Env.RPM_SIGNING_PASSPHRASE }}"
 
 brews:
   - name: ssherlock

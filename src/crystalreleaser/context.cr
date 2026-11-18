@@ -90,6 +90,27 @@ module Crystalreleaser
       github_client(token)
     end
 
+    # The private key packages are signed with, rendered from its template.
+    # A release whose key is not set, or renders empty (a CI secret that is
+    # missing), is an error: going out unsigned would only show on the
+    # machines that refuse the package. A snapshot, which publishes nothing
+    # and runs where the release key is not (a pull request, a developer's
+    # machine), gets nil instead.
+    def signing_key(template : String, field : String, snapshot : Bool = snapshot?) : String?
+      key =
+        begin
+          render(template, field)
+        rescue error : TemplateError
+          # The validation has parsed the template: what fails here is an
+          # environment variable that is not set.
+          raise error unless snapshot
+          ""
+        end
+      return key unless key.strip.empty?
+      raise ConfigError.new("#{field}: the key is empty") unless snapshot
+      nil
+    end
+
     # owner/name of the release: release.github, else the origin remote.
     def release_repo : {String, String}
       if github = @config.release.github

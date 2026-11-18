@@ -16,13 +16,14 @@ module Crystalreleaser
       end
     end
 
-    # The GitHub release of the tag, filled with the archives, packages and
-    # checksums. A new release stays a draft until every asset is uploaded,
+    # The GitHub release of the tag, filled with the archives, packages,
+    # checksums and the public key of signed packages. A new release stays a draft until every asset is uploaded,
     # and is published last: a run that fails halfway never leaves a public
     # release with missing files, and running it again resumes that draft.
     # An existing release keeps the state it has.
     class Release < PublishPipe
-      UPLOADED = {Artifact::Type::Archive, Artifact::Type::LinuxPackage, Artifact::Type::Checksum}
+      UPLOADED = {Artifact::Type::Archive, Artifact::Type::LinuxPackage, Artifact::Type::Checksum,
+                  Artifact::Type::PublicKey}
 
       def name : String
         "release"

@@ -16,7 +16,16 @@ module Crystalreleaser
     #
     # The payload is a gzip-compressed cpio newc archive. The signature header
     # carries the SHA1 and SHA256 of the main header, and the MD5 and size of
-    # header + payload, which is what `rpm -K` checks. No GPG signature.
+    # header + payload, which is what `rpm -K` checks.
+    #
+    # Given a signer, it also carries an OpenPGP signature of the main header,
+    # under RSAHEADER or DSAHEADER: the tags rpm 4 and rpm 6 both read. That
+    # one signature covers the payload too, since the signed header holds the
+    # payload digest: rpm counts a digest found in a signed header as signed
+    # (lib/rpmvs.cc, "Digests in signed header are signature strength"), and
+    # rpmsign itself adds a header + payload signature only to a package
+    # without that digest. rpm 6 (Fedora 43+) installs nothing else by
+    # default: its `%_pkgverify_level` is `all`.
     module Rpm
       HEADER_MAGIC = Bytes[0x8e, 0xad, 0xe8, 0x01, 0, 0, 0, 0]
       LEAD_MAGIC   = Bytes[0xed, 0xab, 0xee, 0xdb]
@@ -40,6 +49,8 @@ module Crystalreleaser
         HEADERSIGNATURES  =   62
         HEADERIMMUTABLE   =   63
         HEADERI18NTABLE   =  100
+        SIG_DSA           =  267
+        SIG_RSA           =  268
         SIG_SHA1          =  269
         SIG_SHA256        =  273
         SIG_SIZE          = 1000
@@ -114,7 +125,54 @@ module Crystalreleaser
 
       record Entry, tag : Int32, type : Type, value : Value
 
-      def self.write(io : IO, spec : PackageSpec) : Nil
+      # Given the bytes to sign, returns their detached OpenPGP signature as
+      # one binary packet.
+      alias Signer = Proc(Bytes, Bytes)
+
+      # The signature header tag an OpenPGP signature of the main header goes
+      # under.
+      def self.signature_tag(packet : Bytes) : Int32
+        body = signature_packet_body(packet)
+        # RFC 4880, 5.2.3: version, signature type, public-key algorithm.
+        version = body[0]
+        algorithm = body[2]
+        unless version == 4
+          raise FormatError.new("an RPM package cannot hold an OpenPGP v#{version} signature (v4 only)")
+        end
+        case algorithm
+        when 1          then Tag::SIG_RSA
+        when 17, 19, 22 then Tag::SIG_DSA
+        else
+          raise FormatError.new("an RPM package cannot hold a signature of OpenPGP public-key algorithm #{algorithm} " \
+                                "(RSA, DSA, ECDSA and EdDSA only)")
+        end
+      end
+
+      # The body of a signature packet (tag 2), past its header in either
+      # format (RFC 4880, 4.2).
+      private def self.signature_packet_body(packet : Bytes) : Bytes
+        error = FormatError.new("not an OpenPGP signature packet")
+        first = packet[0]? || raise error
+        raise error if first & 0x80 == 0
+        if first & 0x40 != 0
+          tag = first & 0x3f
+          length = packet[1]? || raise error
+          skipped =
+            case length
+            when 0..191   then 2
+            when 192..223 then 3
+            when 255      then 6
+            else               raise error
+            end
+        else
+          tag = (first >> 2) & 0x0f
+          skipped = {2, 3, 5, 1}[first & 0x03]
+        end
+        raise error unless tag == 2 && packet.size >= skipped + 4
+        packet[skipped..]
+      end
+
+      def self.write(io : IO, spec : PackageSpec, sign : Signer? = nil) : Nil
         arch = ARCHES[spec.arch]? || raise FormatError.new("no RPM architecture for #{spec.arch}")
         payload, payload_size, uncompressed_sha256 = payload(spec)
         entries = main_entries(spec, arch)
@@ -126,7 +184,7 @@ module Crystalreleaser
           Entry.new(Tag::PAYLOADDIGESTALT, Type::StringArray, [uncompressed_sha256]),
         ])
         header = header(entries.sort_by!(&.tag), Tag::HEADERIMMUTABLE)
-        signature = header(signature_entries(header, payload, payload_size), Tag::HEADERSIGNATURES)
+        signature = header(signature_entries(header, payload, payload_size, sign), Tag::HEADERSIGNATURES)
 
         io.write(lead(spec, arch))
         io.write(signature)
@@ -221,17 +279,25 @@ module Crystalreleaser
         io.to_slice
       end
 
-      private def self.signature_entries(header : Bytes, payload : Bytes, payload_size : Int64) : Array(Entry)
+      private def self.signature_entries(header : Bytes, payload : Bytes, payload_size : Int64,
+                                         sign : Signer?) : Array(Entry)
         md5 = Digest::MD5.new
         md5.update(header)
         md5.update(payload)
-        [
+        entries = [
           Entry.new(Tag::SIG_SHA1, Type::String, Digest::SHA1.hexdigest(header)),
           Entry.new(Tag::SIG_SHA256, Type::String, Digest::SHA256.hexdigest(header)),
           Entry.new(Tag::SIG_SIZE, Type::Int32, [int32(header.size.to_i64 + payload.size, "the package")]),
           Entry.new(Tag::SIG_MD5, Type::Bin, md5.final),
           Entry.new(Tag::SIG_PAYLOADSIZE, Type::Int32, [int32(payload_size, "the payload")]),
         ]
+        if sign
+          # What rpmsign signs for a header-only signature: the main header
+          # from its magic on (rpm's sign/rpmgensig.cc, `sigt_v4`).
+          packet = sign.call(header)
+          entries << Entry.new(signature_tag(packet), Type::Bin, packet)
+        end
+        entries.sort_by!(&.tag)
       end
 
       private def self.main_entries(spec : PackageSpec, arch : String) : Array(Entry)

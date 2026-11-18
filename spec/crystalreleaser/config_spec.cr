@@ -141,6 +141,9 @@ describe Crystalreleaser::Config do
         nfpm.formats.should eq(["deb", "rpm"])
         nfpm.maintainer.should eq("Nicolas Rodriguez <nico@example.com>")
         nfpm.contents.map { |content| {content.src, content.dst} }.should eq([{"LICENSE", "/usr/share/doc/ssherlock/LICENSE"}])
+        signature = nfpm.rpm.signature.should_not be_nil
+        signature.key.should eq("{{ .Env.RPM_SIGNING_KEY }}")
+        signature.passphrase.should eq("{{ .Env.RPM_SIGNING_PASSPHRASE }}")
 
         brew = config.brews.first
         tap = brew.repository.should_not be_nil

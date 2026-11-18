@@ -132,6 +132,11 @@ module Crystalreleaser
           #     maintainer: Your Name <you@example.com>
           #     description: ...
           #     license: MIT
+          #     # Signs the .rpm packages with gpg; rpm 6 installs no other.
+          #     rpm:
+          #       signature:
+          #         key: "{{ .Env.RPM_SIGNING_KEY }}"
+          #         passphrase: "{{ .Env.RPM_SIGNING_PASSPHRASE }}"
 
           # Homebrew formula, pushed to a tap.
           # brews:

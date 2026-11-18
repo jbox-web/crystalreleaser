@@ -382,6 +382,10 @@ module Crystalreleaser
         end
         check_template(nfpm.file_name_template, "#{field}.file_name_template", PACKAGE_VARS)
         check_install_path(nfpm.bindir, "#{field}.bindir")
+        nfpm.rpm.signature.try do |signature|
+          check_rpm_signature(signature, "#{field}.rpm.signature")
+          @warnings << "#{field}.rpm.signature: ignored, formats has no rpm" unless nfpm.formats.includes?("rpm")
+        end
         nfpm.contents.each_with_index do |content, position|
           check_install_path(content.dst, "#{field}.contents[#{position}].dst")
           unless content.type.in?("", "config", "config|noreplace")
@@ -389,6 +393,17 @@ module Crystalreleaser
           end
         end
       end
+    end
+
+    # Only the templates: the values are secrets of the environment, which a
+    # check runs without.
+    private def check_rpm_signature(signature : Config::RpmSignature, field : String) : Nil
+      if signature.key.strip.empty?
+        @errors << "#{field}.key: required to sign the .rpm packages"
+      else
+        check_template(signature.key, "#{field}.key", GLOBAL_VARS)
+      end
+      check_template(signature.passphrase, "#{field}.passphrase", GLOBAL_VARS)
     end
 
     # Where a package installs a file: written as is in the package, so it

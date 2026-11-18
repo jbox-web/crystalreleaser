@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `nfpms[].rpm.signature` signs the .rpm packages, so that they install on a
+  distribution whose rpm verifies signatures by default (rpm 6, Fedora 43 and
+  later, refuses an unsigned package). `key` and `passphrase` are templates
+  reading the private key and its passphrase from the environment; the
+  signature is made by the `gpg` of the machine that runs the release, in a
+  private temporary directory, and neither secret is ever logged nor passed
+  as a command argument. The package carries an OpenPGP v4 signature of its
+  header, RSA or Ed25519, which rpm 4.16 (RHEL 9) and rpm 6.1 both verify.
+  Without the section, the packages are written as before.
+- The public key of signed packages is added to the release as
+  `RPM-GPG-KEY-<package_name>`, for `rpm --import`.
+- A release with signed packages tries the key, its passphrase and `gpg`
+  before any build, by signing one byte. A snapshot without the key warns
+  and leaves the packages unsigned.
+- A signature is dated at the commit, so that a release run again writes the
+  same signed .rpm and resumes its draft.
+
 ## [0.3.0] - 2026-11-18
 
 ### Changed

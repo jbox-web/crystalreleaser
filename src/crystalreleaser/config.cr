@@ -256,6 +256,30 @@ module Crystalreleaser
       property type : String = ""
     end
 
+    # The private key the .rpm packages are signed with, and its passphrase
+    # when it has one. Both are templates, and secrets: usually
+    # `{{ .Env.RPM_SIGNING_KEY }}`, never the value itself. The key is the
+    # text `gpg --armor --export-secret-keys <key id>` prints, for one key.
+    class RpmSignature
+      include YAML::Serializable
+      include YAML::Serializable::Strict
+
+      property key : String
+      property passphrase : String = ""
+    end
+
+    # What only the rpm format of an `nfpms` entry takes.
+    class RpmOptions
+      include YAML::Serializable
+      include YAML::Serializable::Strict
+
+      # Default: the packages are not signed.
+      property signature : RpmSignature? = nil
+
+      def initialize
+      end
+    end
+
     class Nfpm
       include YAML::Serializable
       include YAML::Serializable::Strict
@@ -278,6 +302,7 @@ module Crystalreleaser
       property contents : Array(Content) = [] of Content
       property dependencies : Array(String) = [] of String
       property file_name_template : String = DEFAULT_PACKAGE_NAME
+      property rpm : RpmOptions = RpmOptions.new
     end
 
     # A repository crystalreleaser pushes a generated file to.

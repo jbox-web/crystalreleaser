@@ -227,6 +227,30 @@ describe Crystalreleaser::Validator do
         .should be_empty
     end
 
+    it "signs no .rpm unless asked to" do
+      config = Crystalreleaser::Config.from_yaml("nfpms:\n  - maintainer: J <j@example.com>\n")
+      config.nfpms.first.rpm.signature.should be_nil
+    end
+
+    it "checks the templates of an rpm signature, and wants a key" do
+      nfpm = "nfpms:\n  - maintainer: J <j@example.com>\n    rpm:\n      signature:\n"
+      errors(%(#{nfpm}        key: "{{ .Env.RPM_SIGNING_KEY }}"\n        passphrase: "{{ .Env.RPM_SIGNING_PASSPHRASE }}"\n))
+        .should be_empty
+      errors(%(#{nfpm}        key: "{{ .Env.RPM_SIGNING_KEY }}"\n)).should be_empty
+      errors(%(#{nfpm}        key: ""\n)).should eq(["nfpms[0].rpm.signature.key: required to sign the .rpm packages"])
+      errors(%(#{nfpm}        key: "{{ .Nope }}"\n        passphrase: "{{ .Env.P"\n)).should eq([
+        "nfpms[0].rpm.signature.key: unknown variable .Nope",
+        "nfpms[0].rpm.signature.passphrase: unclosed action, missing '}}'",
+      ])
+    end
+
+    # Otherwise nothing says the signature asked for is never made.
+    it "warns of an rpm signature on an entry that builds no .rpm" do
+      nfpm = "nfpms:\n  - maintainer: J <j@example.com>\n    formats: [deb]\n    rpm:\n      signature:\n        key: \"{{ .Env.K }}\"\n"
+      warnings(nfpm).should eq(["nfpms[0].rpm.signature: ignored, formats has no rpm"])
+      warnings(nfpm.sub("[deb]", "[deb, rpm]")).should be_empty
+    end
+
     it "rejects an unknown make_latest" do
       errors("release:\n  make_latest: maybe\n")
         .should eq(["release.make_latest: unknown value 'maybe' (expected true, false or legacy)"])

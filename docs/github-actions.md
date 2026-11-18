@@ -126,9 +126,23 @@ jobs:
           # repositories, which the workflow token cannot write to.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           AQUA_REGISTRY_TOKEN: ${{ secrets.AQUA_REGISTRY_TOKEN }}
+          # Only needed with nfpms[].rpm.signature: the private key that
+          # signs the .rpm packages, and its passphrase.
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+          RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
 ```
 
 Notes:
+
+- Signed .rpm packages (`nfpms[].rpm.signature`) are signed by the release
+  job alone, the one that writes the packages: the build jobs never see the
+  key. That job needs `gpg` (`sudo apt-get install -y gnupg` when the image
+  does not have it); `release --merge` tries the key, the passphrase and
+  `gpg` before doing anything else. The two secrets are created once, as the
+  README shows ("Signed .rpm packages"), and the public key is uploaded with
+  the packages as `RPM-GPG-KEY-<package_name>`. A workflow that rehearses
+  the release with `--snapshot` on pull requests needs neither secret: the
+  packages are then left unsigned, with a warning.
 
 - `upload-artifact` does not keep Unix permissions; `release --merge` restores
   the executable bit of every binary it reads back.

@@ -11,14 +11,16 @@ crystalreleaser:
 2. packs them into reproducible `.tar.gz` / `.zip` archives;
 3. writes `checksums.txt` and a changelog from the commits since the last tag;
 4. publishes a GitHub release with every asset;
-5. produces `.deb` and `.rpm` packages, a Homebrew formula and an
+5. produces `.deb` and `.rpm` packages (the latter signed, when given a
+   key), a Homebrew formula and an
    [aqua](https://aquaproj.github.io) registry entry.
 
 It is a single executable with no runtime dependency, static on Linux and
 linked only against the libraries macOS ships on macOS: tar, zip, ar,
 cpio and the RPM format are written natively, without `nfpm`, `dpkg-deb` or
 `rpmbuild`. Zip archives keep the Unix permissions, so an extracted binary is
-still executable.
+still executable. One optional step calls a tool of the machine: signing the
+`.rpm` packages is left to `gpg`.
 
 ## Installation
 
@@ -213,7 +215,8 @@ yet; they are pushed once it is.
   `<next patch>-SNAPSHOT-<commit>` and never publishes.
 - Without `--snapshot`, the tree must be clean and HEAD must carry exactly one
   semver tag. `GITHUB_TOKEN` (or `GH_TOKEN`), the tokens of the tap and of the
-  registry, and `--release-notes` are checked before any build. In a split
+  registry, the key of signed .rpm packages (and `gpg`), and
+  `--release-notes` are checked before any build. In a split
   release they are only checked by `release --merge`, once every runner has
   built: `build --split` publishes nothing and asks for no token. A shallow
   clone is refused: the previous tag and the changelog need the history
@@ -226,7 +229,8 @@ yet; they are pushed once it is.
   there with the same sha256. With `release.draft: true` it stays a draft,
   and the formula and the registry entry are written but not pushed, since
   their URLs only answer once the release is published.
-- `dist/artifacts.json` lists the binaries, archives, packages and checksums
+- `dist/artifacts.json` lists the binaries, archives, packages, checksums
+  and the public key of signed packages
   with their sha256 (not the formula nor the registry entry, written after
   it); `dist/metadata.json` holds the release facts.
 
@@ -336,6 +340,10 @@ nfpms:
       - { src: myapp.conf, dst: /etc/myapp/myapp.conf, type: config }  # see below
     dependencies: ["ca-certificates", "libfoo >= 1.2"]  # see below
     file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    rpm:
+      signature:                    # default: not signed; see "Signed .rpm packages"
+        key: "{{ .Env.RPM_SIGNING_KEY }}"
+        passphrase: "{{ .Env.RPM_SIGNING_PASSPHRASE }}"  # for a protected key
 
 brews:
   - name: myapp
@@ -405,9 +413,10 @@ field.
   header + payload), header with the payload SHA256 that rpm >= 4.14
   checks, gzip-compressed cpio payload. The package owns the directories only
   it creates (`/usr/share/doc/<name>`), so removing it removes them; system
-  directories (`/usr/bin`) are left alone. No GPG signature: rpm 6 (Fedora 43
-  and later) refuses unsigned packages unless installed with
-  `rpm -i --nosignature`.
+  directories (`/usr/bin`) are left alone. Not signed by default: rpm 6
+  (Fedora 43 and later) then refuses the package unless installed with
+  `rpm -i --nosignature`. With `rpm.signature` it carries an OpenPGP
+  signature: see [Signed .rpm packages](#signed-rpm-packages).
   A pre-release version `1.2.3-rc.1` becomes `1.2.3~rc.1` in both formats.
 - **formats**, `binary`: the binary itself is the asset, with no archive
   around it and no extension, for the projects whose users download one
@@ -441,6 +450,78 @@ field.
   does not push it for a semver pre-release (`v1.2.0-rc.1`), so that the
   users of the tap or the registry only ever get stable versions.
 
+### Signed .rpm packages
+
+rpm 6 (Fedora 43 and later) installs a package only when it carries a
+signature made with a key rpm knows. `rpm.signature`, on an `nfpms` entry,
+signs its .rpm packages:
+
+```yaml
+nfpms:
+  - id: packages
+    formats: [deb, rpm]
+    maintainer: Me <me@example.com>
+    rpm:
+      signature:
+        key: "{{ .Env.RPM_SIGNING_KEY }}"
+        passphrase: "{{ .Env.RPM_SIGNING_PASSPHRASE }}"  # for a protected key
+```
+
+- **key**: the private key as text, what
+  `gpg --armor --export-secret-keys <key id>` prints, RSA or Ed25519: one
+  key, an export of several is refused.
+  **passphrase**: the one of that key, left out when it has none. Both are
+  secrets: write them as `{{ .Env.NAME }}` and give the values to the
+  environment of the release, never to the config file.
+- The signature is made by `gpg`, which the machine that runs `release` (the
+  merge job of a split release) must have. crystalreleaser gives it the key
+  and the passphrase in files of a private temporary directory (0700), never
+  as command arguments, uses that directory as gpg's whole home, so that the
+  keyring of the user is neither read nor written, and removes it when the
+  packages are written, or when the run is interrupted. Nothing of either
+  secret is logged.
+- A release tries the key before any build, by signing one byte with it: a
+  key or a passphrase that is not set, a key that is empty or holds no
+  private key, a passphrase that does not unlock it, or a machine without
+  `gpg`, fails there. A `--snapshot` run without the key warns and leaves
+  the packages unsigned: it publishes nothing, and runs where the release
+  key is not (a pull request, a developer's machine).
+- The signature is dated at the commit, like the files of the package (at
+  the creation of the key when the key is newer): a release run again writes
+  the same .rpm, byte for byte, and resumes its draft.
+- `check` warns of an `rpm.signature` on an entry whose `formats` has no
+  `rpm`: nothing is signed then.
+- The .deb packages are not signed: dpkg does not verify the signature of a
+  package it installs.
+- The package carries one OpenPGP v4 signature of its header, in the tag
+  rpm 4 and rpm 6 both read (`RSAHEADER`, or `DSAHEADER` for Ed25519). The
+  payload is covered through its SHA256, which the signed header holds.
+
+The public key joins the release as `RPM-GPG-KEY-<package_name>`, exported
+from the key that signed. This is what the users of the package import, once:
+
+```sh
+rpm --import https://github.com/me/myapp/releases/download/v1.2.3/RPM-GPG-KEY-myapp
+rpm -K myapp_1.2.3_amd64.rpm    # digests signatures OK
+rpm -i myapp_1.2.3_amd64.rpm
+```
+
+Without the key imported, rpm 6 refuses the package (`does not verify: ...
+NOKEY`); rpm 4.16 (RHEL 9 and its clones) installs it with a `NOKEY`
+warning, as it installs an unsigned one. A key fetched from the release that
+holds the package proves no more than that release does: to let users check
+it, publish its fingerprint somewhere else too (`gpg --show-keys
+RPM-GPG-KEY-myapp` prints it).
+
+To create a key for the releases of a project, and hand it to GitHub Actions
+without it ever showing on a command line:
+
+```sh
+gpg --quick-generate-key "myapp releases <me@example.com>" ed25519 sign never
+gpg --armor --export-secret-keys me@example.com | gh secret set RPM_SIGNING_KEY
+gh secret set RPM_SIGNING_PASSPHRASE    # reads the value from standard input
+```
+
 ### Third-party notices
 
 The static binary embeds the licenses of what it links (openssl, pcre2,
@@ -460,9 +541,12 @@ mise dev:ameba && mise dev:format-check
 ```
 
 The specs check the hand-written formats with the system tools when they are
-installed (`tar`, `cpio`, `unzip`, `dpkg-deb`, `rpm`) and are pending
+installed (`tar`, `cpio`, `unzip`, `dpkg-deb`, `rpm`, and `gpg` for the
+signed packages) and are pending
 otherwise. `SPEC_REQUIRE_TOOLS=rpm,dpkg-deb` (or `all`) makes a missing tool a
-failure.
+failure. The docker-tagged examples install a signed package in
+`fedora:latest` (rpm 6) and `rockylinux:9` (rpm 4.16). The keys under
+`spec/fixtures/gpg/` were generated for the specs and sign nothing else.
 
 ## License
 

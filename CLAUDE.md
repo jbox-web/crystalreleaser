@@ -17,6 +17,14 @@ tool (`github:crystal-ameba/ameba`).
 Formats the stdlib lacks (tar, ar, cpio, rpm) are written by hand under
 `src/crystalreleaser/formats/`.
 
+One step is left to a tool of the machine, and only when a config asks for
+it: the OpenPGP signature of .rpm packages is made by `gpg`
+(`src/crystalreleaser/gpg.cr`). The stdlib declares no private-key primitive
+(nothing of `EVP_PKEY` or `RSA_*` in its `lib_crypto.cr`), and writing the
+cryptography by hand was ruled out. The key and its passphrase never go
+through an argument or the log: keep it so. `spec/fixtures/gpg/` holds keys
+generated for the specs, never a real one.
+
 ## The canonical templates live outside this repository
 
 `mise.toml`, `.github/workflows/ci.yml`, `Brewfile`,
@@ -55,8 +63,9 @@ there are only these:
   job runs the examples tagged `cross` with zig and an Alpine sysroot: the
   cross strategy is reached by nothing else. The linux and
   macOS test jobs set `SPEC_REQUIRE_TOOLS`, and the linux ones install `rpm`,
-  `cpio` and `unzip`: the specs check the formats written by hand with the
-  system tools, and a missing tool must fail rather than leave them pending.
+  `cpio`, `unzip` and `gnupg`: the specs check the formats written by hand
+  with the system tools, sign .rpm packages with gpg, and a missing tool must
+  fail rather than leave them pending.
 - `.github/workflows/release.yml` has no canonical template: it is the
   split/merge release of docs/github-actions.md, building the tool from source.
 - `Brewfile` — `gettext` removed, `cask 'docker'` uncommented with a comment

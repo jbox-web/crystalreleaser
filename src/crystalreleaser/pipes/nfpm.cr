@@ -4,13 +4,15 @@ require "../context"
 require "../formats/deb"
 require "../formats/package"
 require "../formats/rpm"
+require "../gpg"
 require "../pipe"
 
 module Crystalreleaser
   module Pipes
     # .deb and .rpm packages of the Linux binaries, written natively (no
     # nfpm, no dpkg-deb, no rpmbuild): the binaries go to `bindir`, the
-    # `contents` entries where they say.
+    # `contents` entries where they say. With `rpm.signature`, the .rpm
+    # packages are signed, by gpg, and the public key joins the artifacts.
     class Nfpm < Pipe
       def name : String
         "nfpm"
@@ -29,14 +31,68 @@ module Crystalreleaser
         ctx.config.nfpms.each_with_index do |nfpm, index|
           binaries = ctx.artifacts.filter(type: Artifact::Type::Binary, os: "linux")
             .select { |artifact| nfpm.builds.includes?(artifact.build_id) }
-          binaries.group_by { |artifact| artifact.arch || "" }.each do |arch, group|
-            nfpm.formats.each { |format| package(ctx, nfpm, index, arch, group, format) }
+          next if binaries.empty?
+          with_signer(ctx, nfpm, index) do |signer|
+            # Dated at the commit, as the files of the package are: a release
+            # run again writes the same .rpm, byte for byte, and so finds the
+            # assets it already uploaded unchanged.
+            sign = signer.try { |gpg| ->(data : Bytes) { gpg.sign(data, ctx.commit_time) } }
+            binaries.group_by { |artifact| artifact.arch || "" }.each do |arch, group|
+              nfpm.formats.each { |format| package(ctx, nfpm, index, arch, group, format, sign) }
+            end
+            publish_key(ctx, nfpm, index, signer) if signer
           end
         end
       end
 
+      # Yields what signs the .rpm packages of the entry, or nil when they are
+      # not signed: no `rpm.signature`, no rpm format, or a snapshot run
+      # without the key.
+      #
+      # The key is resolved before any package is written: see
+      # Context#signing_key for what a release and a snapshot each get.
+      private def with_signer(ctx : Context, nfpm : Config::Nfpm, index : Int32, & : Gpg? ->) : Nil
+        field = "nfpms[#{index}].rpm.signature"
+        signature = nfpm.rpm.signature
+        unless signature && nfpm.formats.includes?("rpm")
+          yield nil
+          return
+        end
+        key = ctx.signing_key(signature.key, "#{field}.key")
+        unless key
+          ctx.logger.warn("#{field}: no key in this snapshot, the .rpm packages are not signed")
+          yield nil
+          return
+        end
+        passphrase = ctx.render(signature.passphrase, "#{field}.passphrase")
+        begin
+          Gpg.open(key, passphrase) { |gpg| yield gpg }
+        rescue error : Gpg::Error
+          raise PackageError.new("#{field}: #{error.message}")
+        end
+      end
+
+      # The public half of the key, next to the packages it signed: what
+      # their users give to `rpm --import`. Exported from the key that signed,
+      # so it cannot be another one. Named as the key files of a distribution
+      # are (/etc/pki/rpm-gpg/RPM-GPG-KEY-*).
+      private def publish_key(ctx : Context, nfpm : Config::Nfpm, index : Int32, gpg : Gpg) : Nil
+        field = "nfpms[#{index}].rpm.signature"
+        file_name = ctx.file_name("RPM-GPG-KEY-#{nfpm.package_name}", "nfpms[#{index}].package_name")
+        path = ctx.dist_path(file_name)
+        public_key = gpg.public_key
+        if existing = ctx.artifacts.all.find { |artifact| artifact.name == file_name }
+          # Two entries of one package name signed with the same key.
+          return if existing.type.public_key? && File.read(path) == public_key
+          raise PackageError.new("#{field}: #{file_name} already holds another key; give this entry its own package_name")
+        end
+        File.write(path, public_key)
+        ctx.logger.info(file_name)
+        ctx.artifacts.add(Artifact.new(Artifact::Type::PublicKey, file_name, ctx.relative(path), size: File.size(path)))
+      end
+
       private def package(ctx : Context, nfpm : Config::Nfpm, index : Int32, arch : String,
-                          binaries : Array(Artifact), format : String) : Nil
+                          binaries : Array(Artifact), format : String, sign : Formats::Rpm::Signer?) : Nil
         spec = package_spec(ctx, nfpm, index, arch, binaries)
         vars = ctx.vars.merge({
           "Os"          => "linux",
@@ -56,7 +112,7 @@ module Crystalreleaser
         end
         path = ctx.dist_path(file_name)
         write_output(path) do |file|
-          format == "rpm" ? Formats::Rpm.write(file, spec) : Formats::Deb.write(file, spec)
+          format == "rpm" ? Formats::Rpm.write(file, spec, sign) : Formats::Deb.write(file, spec)
         end
         ctx.logger.info(file_name)
         ctx.artifacts.add(Artifact.new(Artifact::Type::LinuxPackage, file_name, ctx.relative(path),

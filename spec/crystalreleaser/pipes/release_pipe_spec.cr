@@ -70,6 +70,29 @@ describe Crystalreleaser::Pipes::Release do
     end
   end
 
+  # Without it, nobody can verify the signed packages of the release.
+  it "uploads the public key the packages were signed with" do
+    Fixture.project(config: CONFIG) do |project|
+      transport = FakeTransport.new do |request|
+        case {request.method, request.url}
+        when {"GET", TAG}                then github_response(404)
+        when {"GET", RELEASES}           then github_response(200, "[]")
+        when {"POST", "#{API}/releases"} then github_response(201, %({"id": 7, "draft": true}))
+        when {"GET", ASSETS}             then github_response(200, "[]")
+        else                                  github_response(201, "{}")
+        end
+      end
+      ctx = release_context(project, transport)
+      path = ctx.dist_path("RPM-GPG-KEY-toy")
+      File.write(path, "the public key")
+      ctx.artifacts.add(Crystalreleaser::Artifact.new(Crystalreleaser::Artifact::Type::PublicKey, "RPM-GPG-KEY-toy", ctx.relative(path)))
+      Crystalreleaser::Pipes::Release.new.run(ctx)
+
+      transport.calls.should contain("POST #{UPLOADS}/releases/7/assets?name=RPM-GPG-KEY-toy")
+      transport.requests.find!(&.url.ends_with?("name=RPM-GPG-KEY-toy")).body.should eq("the public key")
+    end
+  end
+
   # GitHub does not keep a make_latest given when the draft is created
   # (observed on a real repository): it only counts on the request that
   # publishes. Without it, a v1.9.1 published after v2.0.0 becomes "Latest".
