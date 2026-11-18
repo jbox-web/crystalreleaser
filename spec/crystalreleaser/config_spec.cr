@@ -212,6 +212,26 @@ describe Crystalreleaser::Config do
       end
     end
 
+    # The validator warns about a list written empty, and only about that one.
+    it "tells static_libs written as an empty list from a key that is absent or has no value" do
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    static_libs: []\n") do |project|
+        build = load(project).builds.first
+        build.static_libs_written?.should be_true
+        build.static_libs.should be_empty
+      end
+      ["", "    static_libs:\n", "    static_libs: ~\n"].each do |written|
+        Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n#{written}") do |project|
+          build = load(project).builds.first
+          build.static_libs_written?.should be_false
+          build.static_libs.should be_empty
+        end
+      end
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    static_libs:\n" \
+                              "      - formula: openssl@4\n        libs: [ssl]\n") do |project|
+        load(project).builds.first.static_libs_written?.should be_true
+      end
+    end
+
     it "reads the aliases of a build, as empty by default" do
       Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    aliases: [toy-manager, tm]\n") do |project|
         load(project).builds.first.aliases.should eq(["toy-manager", "tm"])

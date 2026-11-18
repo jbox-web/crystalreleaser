@@ -462,6 +462,29 @@ describe Crystalreleaser::Validator do
       ])
     end
 
+    # A list written empty reads as "link nothing statically", which is what
+    # leaving the key out already does: most likely a leftover.
+    it "warns that a list written empty links nothing, naming the field" do
+      result = validate(build_with(darwin, "    static_libs: []\n"), DARWIN_HOST)
+      result.errors.should be_empty
+      result.warnings.should eq(["builds[0].static_libs: the list is empty and links nothing: remove the key or list a formula"])
+    end
+
+    it "warns about the empty list alone on a build without a native darwin platform" do
+      warnings(build_with("      - os: linux\n        arch: amd64\n        strategy: docker\n        static: true\n",
+        "    static_libs: []\n")).should eq([
+        "builds[0].static_libs: the list is empty and links nothing: remove the key or list a formula",
+      ])
+    end
+
+    it "says nothing when the key is absent, written without a value or written as ~" do
+      ["", "    static_libs:\n", "    static_libs: ~\n"].each do |written|
+        result = validate(build_with(darwin, written), DARWIN_HOST)
+        result.errors.should be_empty
+        result.warnings.should be_empty
+      end
+    end
+
     it "rejects an empty formula or library list, and file names instead of library names, naming the entry" do
       errors(build_with(darwin, "    static_libs:\n      - formula: \"\"\n        libs: []\n"), DARWIN_HOST).should eq([
         %(builds[0].static_libs[0].formula: "" is not a Homebrew formula name),

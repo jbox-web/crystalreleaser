@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot hold a link. The Homebrew formula is the project's own `install`:
   `bin.install_symlink "donico" => "donico-manager"`.
 
+### Changed
+
+- `check` warns about a `static_libs` list written empty (`static_libs: []`),
+  which was accepted in silence and links nothing. A key that is absent or
+  has no value (`static_libs:`, `static_libs: ~`) stays silent.
+
 ## [0.3.0] - 2026-11-18
 
 ### Changed

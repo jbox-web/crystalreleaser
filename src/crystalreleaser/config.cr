@@ -95,6 +95,16 @@ module Crystalreleaser
       end
     end
 
+    # Reads a `static_libs` list as the array alone. The key is optional, and
+    # YAML::Serializable parses an optional type as a union, whose only error
+    # is "Couldn't parse (Array(StaticLibs) | Nil)" at the list: read this
+    # way, a malformed entry keeps its own error, at its own position.
+    module StaticLibsList
+      def self.from_yaml(ctx : YAML::ParseContext, node : YAML::Nodes::Node) : Array(StaticLibs)
+        Array(StaticLibs).new(ctx, node)
+      end
+    end
+
     class Build
       include YAML::Serializable
       include YAML::Serializable::Strict
@@ -118,9 +128,25 @@ module Crystalreleaser
       # One entry per Homebrew formula. On the build, not on a platform: arm64
       # and amd64 must embed the same libraries, which the same formulas for
       # both is what guarantees.
-      property static_libs : Array(StaticLibs) = [] of StaticLibs
+      #
+      # The list as it is written, nil when the key is absent or has no
+      # value: a list written empty links nothing either, but it is written,
+      # and the validator warns about that one alone.
+      @[YAML::Field(key: "static_libs", converter: Crystalreleaser::Config::StaticLibsList)]
+      @written_static_libs : Array(StaticLibs)? = nil
 
       def initialize(@id : String = "", @target : String? = nil)
+      end
+
+      # The formulas to link, none when the key is not written.
+      def static_libs : Array(StaticLibs)
+        @written_static_libs || [] of StaticLibs
+      end
+
+      # Whether the configuration holds a `static_libs` list, even an empty
+      # one.
+      def static_libs_written? : Bool
+        !@written_static_libs.nil?
       end
 
       # A second name of a binary: a file name in the folder it is installed

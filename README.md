@@ -144,7 +144,9 @@ build setting, not a platform one, for that same reason; on the other
 platforms it does nothing (the linux builds are static already), and `check`
 warns when the build has no native darwin platform at all. `check` refuses a
 formula written twice, and a library taken from two formulas: both archives
-would land under the same name.
+would land under the same name. It warns about a list written empty
+(`static_libs: []`), which links nothing: leave the key out instead (a key
+without a value, `static_libs:` or `static_libs: ~`, counts as left out).
 
 A formula that itself depends on another Homebrew library needs that one
 listed too, or the binary still loads its `.dylib` and fails the `otool -L`

@@ -206,7 +206,13 @@ module Crystalreleaser
     end
 
     private def check_static_libs(build : Config::Build, field : String) : Nil
-      return if build.static_libs.empty?
+      return unless build.static_libs_written?
+      # Written, and empty: it does what leaving the key out does. A key
+      # without a value (`static_libs:`, `static_libs: ~`) is not written.
+      if build.static_libs.empty?
+        @warnings << "#{field}.static_libs: the list is empty and links nothing: remove the key or list a formula"
+        return
+      end
       # Where each formula and each library was first written: the archives
       # of every formula land in one folder, under lib<name>.a, so a second
       # library of the same name would silently replace the first.
