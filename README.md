@@ -260,6 +260,7 @@ builds:
     target: myapp                   # shard.yml target; main is deduced
     # main: src/myapp.cr            # or explicit
     binary: myapp                   # default: target
+    aliases: [myapp-ctl]            # other names, installed as symlinks: see below
     flags: [--release, --no-debug]  # default: [--release]
     env:
       - MYAPP_VERSION={{ .Version }}
@@ -354,6 +355,7 @@ brews:
     license: MIT
     install: |                      # default: bin.install "<name>"
       bin.install "myapp"
+      bin.install_symlink "myapp" => "myapp-ctl"
     test: |                         # default: system bin/"<name>", "--version"
       system bin/"myapp", "--version"
     skip_upload: "false"            # false | true | auto: see below
@@ -425,6 +427,24 @@ field.
   `name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"` publishes
   `myapp-linux-amd64`. The Homebrew formula and the aqua entry only ever
   describe the tar.gz archives.
+- **aliases**, on a build: other names the binary is installed under, each a
+  symbolic link to it, next to it (`aliases: [donico-manager]` for a binary
+  `donico`). The link's target is the binary's bare name, so it holds
+  wherever the files land. It is written in the tar.gz archives (beside the
+  binary, inside the wrapping directory if any), in the .deb and .rpm
+  packages (in `bindir`) and in the aqua entry (a second `files` entry whose
+  `src` is the binary). Only tar.gz can hold a link: `check` refuses a build
+  with aliases that an archive would write as `zip` or `binary`. An alias is
+  made of letters, digits, `.`, `_` and `-`, and must not be the installed
+  name of a build nor another alias, case ignored (the default macOS file
+  system ignores it: `Donico` would replace `donico`). The Homebrew formula is the project's
+  own `install`, which installs the alias itself:
+
+  ```yaml
+  install: |
+    bin.install "donico"
+    bin.install_symlink "donico" => "donico-manager"
+  ```
 - **checksum**, `split`: one `<asset>.sha256` next to each asset, in the
   format of `sha256sum`, instead of the single `checksums.txt`; the aqua
   entry then points at `{{.Asset}}.sha256`.

@@ -350,6 +350,78 @@ describe Crystalreleaser::Pipes::Archive do
     end
   end
 
+  # ustar: typeflag at 156, linkname at 157, size at 124, mode at 100 of the
+  # header block, read from the bytes the archive holds.
+  it "archives a symbolic link beside the binary for each alias, pointing at the binary" do
+    Fixture.project do |project|
+      archive(project) { |context| fake_binary(context, "linux", "amd64", aliases: ["toy-manager"]) }
+
+      path = project.path("dist/toy_1.2.3-rc.1_linux_amd64.tar.gz")
+      summary(read_tar_gz(path)).should eq([{"toy", 0o755, '0'}, {"toy-manager", 0o777, '2'}])
+      header = tar_header(path, "toy-manager")
+      header[156].chr.should eq('2')
+      String.new(header[157, 3]).should eq("toy")
+      header[160, 97].all?(&.zero?).should be_true
+      String.new(header[124, 12]).should eq("00000000000\0")
+      String.new(header[100, 8]).should eq("0000777\0")
+    end
+  end
+
+  it "puts the symbolic link inside the wrap directory, next to the binary" do
+    Fixture.project do |project|
+      archive(project, "archives:\n  - id: default\n    wrap_in_directory: true\n    files: []\n") do |context|
+        fake_binary(context, "linux", "amd64", aliases: ["toy-manager", "tm"])
+      end
+
+      path = project.path("dist/toy_1.2.3-rc.1_linux_amd64.tar.gz")
+      summary(read_tar_gz(path)).should eq([
+        {"toy_1.2.3-rc.1_linux_amd64/", 0o755, '5'},
+        {"toy_1.2.3-rc.1_linux_amd64/tm", 0o777, '2'},
+        {"toy_1.2.3-rc.1_linux_amd64/toy", 0o755, '0'},
+        {"toy_1.2.3-rc.1_linux_amd64/toy-manager", 0o777, '2'},
+      ])
+      # The target is the sibling's name, not a path: it stays valid wherever
+      # the archive is extracted.
+      header = tar_header(path, "toy_1.2.3-rc.1_linux_amd64/toy-manager")
+      header[156].chr.should eq('2')
+      String.new(header[157, 3]).should eq("toy")
+    end
+  end
+
+  it "is listed by the system tar as a link to the binary" do
+    pending_tool!("tar")
+    Fixture.project do |project|
+      archive(project) { |context| fake_binary(context, "linux", "amd64", aliases: ["toy-manager"]) }
+      output = IO::Memory.new
+      Process.run("tar", ["-tvzf", project.path("dist/toy_1.2.3-rc.1_linux_amd64.tar.gz")], output: output).success?.should be_true
+      lines = output.to_s.lines
+      lines.last.should start_with("lrwxrwxrwx")
+      lines.last.should end_with("toy-manager -> toy")
+    end
+  end
+
+  it "records the aliases of the archive for the aqua pipe, and only when there are some" do
+    Fixture.project do |project|
+      ctx = archive(project) { |context| fake_binary(context, "linux", "amd64", aliases: ["toy-manager", "tm"]) }
+      ctx.artifacts.filter(type: Crystalreleaser::Artifact::Type::Archive).first.extra["aliases"].should eq("toy-manager=toy,tm=toy")
+    end
+    Fixture.project do |project|
+      ctx = archive(project) { |context| fake_binary(context, "linux", "amd64") }
+      ctx.artifacts.filter(type: Crystalreleaser::Artifact::Type::Archive).first.extra.has_key?("aliases").should be_false
+    end
+  end
+
+  it "refuses an alias that is also a file of the archive" do
+    Fixture.project do |project|
+      project.write("toy-manager", "a file\n")
+      expect_raises(Crystalreleaser::PackageError, "archives[0]: toy-manager appears twice in toy_1.2.3-rc.1_linux_amd64.tar.gz") do
+        archive(project, "archives:\n  - id: default\n    files: [toy-manager]\n") do |context|
+          fake_binary(context, "linux", "amd64", aliases: ["toy-manager"])
+        end
+      end
+    end
+  end
+
   it "refuses two archives with the same name" do
     config = "archives:\n  - id: default\n    name_template: '{{ .ProjectName }}'\n"
     Fixture.project do |project|

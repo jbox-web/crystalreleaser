@@ -151,9 +151,13 @@ module Crystalreleaser
           end
         end
         triple = Builders.triple(platform.os, platform.arch, platform.static?)
+        extra = {"target" => triple, "static" => platform.static?.to_s}
+        # With the binary, so that the archive, aqua and package pipes find
+        # them where they find the binary, on the machine that merges split
+        # builds as well. Absent without aliases: artifacts.json is unchanged.
+        extra["aliases"] = build.aliases.join(',') unless build.aliases.empty?
         ctx.artifacts.add(Artifact.new(Artifact::Type::Binary, build.binary, ctx.relative(path.to_s),
-          os: platform.os, arch: platform.arch, build_id: build.id, size: File.size(path),
-          extra: {"target" => triple, "static" => platform.static?.to_s}))
+          os: platform.os, arch: platform.arch, build_id: build.id, size: File.size(path), extra: extra))
         if description = Builders.describe(path.to_s)
           Builders.file_warnings(description, platform.os, platform.arch, static: platform.static?).each do |warning|
             ctx.logger.warn("#{build.id} #{platform.os}/#{platform.arch}: #{warning}")

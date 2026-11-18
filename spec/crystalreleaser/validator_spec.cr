@@ -343,6 +343,104 @@ describe Crystalreleaser::Validator do
     end
   end
 
+  describe "aliases" do
+    linux = "      - os: linux\n        arch: amd64\n"
+
+    it "accepts aliases made of letters, digits, dot, underscore and dash" do
+      errors(build_with(linux, "    aliases: [toy-manager, Toy_2.x]\n")).should be_empty
+    end
+
+    it "refuses a name outside [A-Za-z0-9._-]+, naming the alias" do
+      errors(build_with(linux, "    aliases: [ok, \"a b\", \"x/y\", \"\", \"..\"]\n")).should eq([
+        %(builds[0].aliases[1]: "a b" is not an alias name (expected letters, digits, '.', '_' or '-')),
+        %(builds[0].aliases[2]: "x/y" is not an alias name (expected letters, digits, '.', '_' or '-')),
+        %(builds[0].aliases[3]: "" is not an alias name (expected letters, digits, '.', '_' or '-')),
+        %(builds[0].aliases[4]: ".." is not an alias name (expected letters, digits, '.', '_' or '-')),
+      ])
+    end
+
+    # The installed name is `binary`, which may differ from the shard target.
+    it "refuses the installed name of the build itself, or of another build" do
+      config = "builds:\n  - id: one\n    target: toy\n    binary: donico\n    aliases: [donico]\n" \
+               "  - id: two\n    target: toy\n    binary: other\n    aliases: [donico, toy]\n"
+      errors(config).should eq([
+        "builds[0].aliases[0]: \"donico\" is the installed name of builds[0] (build one)",
+        "builds[1].aliases[0]: \"donico\" is the installed name of builds[0] (build one)",
+      ])
+    end
+
+    it "does not take the shard target for an installed name when binary says otherwise" do
+      errors("builds:\n  - id: one\n    target: toy\n    binary: donico\n    aliases: [toy]\n").should be_empty
+    end
+
+    it "refuses a name given twice in the configuration, in one build or across two" do
+      config = "builds:\n  - id: one\n    target: toy\n    binary: a\n    aliases: [x, y, x]\n" \
+               "  - id: two\n    target: toy\n    binary: b\n    aliases: [y]\n"
+      errors(config).should eq([
+        %(builds[0].aliases[2]: "x" is already builds[0].aliases[0]),
+        %(builds[1].aliases[0]: "y" is already builds[0].aliases[1]),
+      ])
+    end
+
+    # The default macOS file system ignores case: extracted there, an alias
+    # Donico would replace the binary donico by a link to itself.
+    it "refuses an alias that differs from an installed name only by case" do
+      config = "builds:\n  - id: one\n    target: toy\n    binary: donico\n    aliases: [Donico]\n" \
+               "  - id: two\n    target: toy\n    binary: other\n    aliases: [DONICO]\n"
+      errors(config).should eq([
+        "builds[0].aliases[0]: \"Donico\" is the installed name of builds[0] (build one)",
+        "builds[1].aliases[0]: \"DONICO\" is the installed name of builds[0] (build one)",
+      ])
+    end
+
+    it "refuses two aliases that differ only by case, in one build or across two" do
+      config = "builds:\n  - id: one\n    target: toy\n    binary: a\n    aliases: [tm, TM]\n" \
+               "  - id: two\n    target: toy\n    binary: b\n    aliases: [Tm]\n"
+      errors(config).should eq([
+        %(builds[0].aliases[1]: "TM" is already builds[0].aliases[0]),
+        %(builds[1].aliases[0]: "Tm" is already builds[0].aliases[0]),
+      ])
+    end
+
+    # windows is warned about and skipped: nothing of it is ever archived.
+    it "ignores the archive format of a platform that is not built" do
+      config = "builds:\n  - id: donico\n    target: toy\n    aliases: [donico-manager]\n" \
+               "    platforms:\n      - os: linux\n        arch: amd64\n      - os: windows\n        arch: amd64\n" \
+               "archives:\n  - id: a\n    format_overrides:\n      - os: windows\n        formats: [zip]\n"
+      result = validate(config)
+      result.errors.should be_empty
+      result.warnings.should eq(["builds[0].platforms[1]: windows/amd64 is accepted but cannot be built yet; it will be skipped"])
+    end
+
+    it "refuses a build with aliases archived as zip or binary, before anything is built" do
+      build = "builds:\n  - id: donico\n    target: toy\n    aliases: [donico-manager]\n"
+      errors(build + "archives:\n  - id: a\n    formats: [zip]\n")
+        .should eq(["archives[0]: aliases are only written to tar.gz (build donico)"])
+      errors(build + "archives:\n  - id: a\n    formats: [tar.gz, binary]\n")
+        .should eq(["archives[0]: aliases are only written to tar.gz (build donico)"])
+    end
+
+    it "refuses an override that archives a platform of the build as zip" do
+      config = "builds:\n  - id: donico\n    target: toy\n    aliases: [donico-manager]\n" \
+               "    platforms:\n      - os: linux\n        arch: amd64\n      - os: darwin\n        arch: arm64\n" \
+               "archives:\n  - id: a\n    format_overrides:\n      - os: darwin\n        formats: [zip]\n"
+      errors(config).should eq(["archives[0]: aliases are only written to tar.gz (build donico)"])
+    end
+
+    it "leaves zip and binary alone for builds without aliases, and accepts tar.gz for the others" do
+      errors("archives:\n  - id: a\n    formats: [zip, binary]\n").should be_empty
+      errors("builds:\n  - id: donico\n    target: toy\n    aliases: [donico-manager]\n" \
+             "archives:\n  - id: a\n    formats: [tar.gz]\n").should be_empty
+    end
+
+    it "only looks at the builds an archive lists" do
+      config = "builds:\n  - id: donico\n    target: toy\n    aliases: [donico-manager]\n" \
+               "  - id: plain\n    target: toy\n" \
+               "archives:\n  - id: a\n    builds: [donico]\n  - id: b\n    builds: [plain]\n    formats: [zip]\n"
+      errors(config).should be_empty
+    end
+  end
+
   describe "static_libs" do
     darwin = "      - os: darwin\n        arch: arm64\n"
 

@@ -93,11 +93,31 @@ module Crystalreleaser
         if artifact.name.empty? || artifact.name.includes?('/') || artifact.name.in?(".", "..")
           raise BuildError.new("#{name}: #{artifact.path} is named #{artifact.name.inspect}, which is not a plain name")
         end
+        check_recorded_aliases(artifact, name)
         os = metadata["os"]?.try(&.as_s?)
         arch = metadata["arch"]?.try(&.as_s?)
         return unless os && arch
         unless artifact.os == os && artifact.arch == arch
           raise BuildError.new("#{name}: #{artifact.path} is recorded for #{artifact.os}/#{artifact.arch} in a #{os}/#{arch} build")
+        end
+      end
+
+      # They become member names of the archive, and names of the aqua
+      # entry: one given twice would be written twice in both, and one
+      # named as the binary would replace it. Compared without case: the
+      # default macOS file system ignores it.
+      private def check_recorded_aliases(artifact : Artifact, name : String) : Nil
+        seen = Set(String).new
+        (artifact.extra["aliases"]? || "").split(',').reject(&.empty?).each do |alias_name|
+          if !Config::Build.alias_name?(alias_name)
+            raise BuildError.new("#{name}: #{artifact.path} lists the alias #{alias_name.inspect}, which is not an alias name")
+          end
+          if alias_name.downcase == artifact.name.downcase
+            raise BuildError.new("#{name}: #{artifact.path} lists the alias #{alias_name.inspect}, which is the binary's own name")
+          end
+          unless seen.add?(alias_name.downcase)
+            raise BuildError.new("#{name}: #{artifact.path} lists the alias #{alias_name.inspect} twice")
+          end
         end
       end
 

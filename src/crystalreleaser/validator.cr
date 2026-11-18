@@ -49,6 +49,7 @@ module Crystalreleaser
       check_env
       check_hooks
       check_builds
+      check_aliases
       check_archives
       check_checksum
       check_changelog
@@ -144,6 +145,32 @@ module Crystalreleaser
         check_env_list(build.env, "#{field}.env", PLATFORM_VARS)
         check_docker(build.docker, field, build.platforms.any? { |platform| platform.strategy == "docker" })
         build.cross.sysroot.try { |sysroot| check_template(sysroot, "#{field}.cross.sysroot", PLATFORM_VARS) }
+      end
+    end
+
+    # An alias is a file name next to the binary: it must not take the place
+    # of the installed name of any build (`binary`, not the shard target), nor
+    # of another alias. Names are compared without case: the default macOS
+    # file system ignores it, and there an alias Donico extracted after the
+    # binary donico replaces it with a link to itself.
+    private def check_aliases : Nil
+      installed = {} of String => Int32
+      @config.builds.each_with_index { |build, index| installed[build.binary.downcase] ||= index }
+      taken = {} of String => String
+      @config.builds.each_with_index do |build, index|
+        build.aliases.each_with_index do |name, position|
+          where = "builds[#{index}].aliases[#{position}]"
+          if !Config::Build.alias_name?(name)
+            @errors << "#{where}: #{name.inspect} is not an alias name (expected letters, digits, '.', '_' or '-')"
+            next
+          end
+          if owner = installed[name.downcase]?
+            @errors << "#{where}: #{name.inspect} is the installed name of builds[#{owner}] (build #{@config.builds[owner].id})"
+          elsif first = taken[name.downcase]?
+            @errors << "#{where}: #{name.inspect} is already #{first}"
+          end
+          taken[name.downcase] ||= where
+        end
       end
     end
 
@@ -277,7 +304,7 @@ module Crystalreleaser
     end
 
     private def check_platform(platform : Config::Platform, where : String, couple : String) : Nil
-      if platform.os == "windows"
+      if skipped?(platform)
         @warnings << "#{where}: #{couple} is accepted but cannot be built yet; it will be skipped"
       elsif !PLATFORMS.includes?(couple)
         @errors << "#{where}: unsupported platform #{couple} (supported: #{PLATFORMS.join(", ")})"
@@ -288,6 +315,12 @@ module Crystalreleaser
       elsif platform.strategy == "native"
         check_native(platform, where, couple)
       end
+    end
+
+    # A platform accepted in the configuration but never built: nothing of it
+    # reaches an archive or a package.
+    private def skipped?(platform : Config::Platform) : Bool
+      platform.os == "windows"
     end
 
     private def check_native(platform : Config::Platform, where : String, couple : String) : Nil
@@ -311,10 +344,25 @@ module Crystalreleaser
           end
           check_formats(override.formats, "#{where}.formats", ARCHIVE_FORMATS, "tar.gz, zip or binary")
         end
+        check_archive_aliases(archive, field)
         check_template(archive.name_template, "#{field}.name_template", PLATFORM_VARS)
         archive.file_specs.each_with_index do |spec, position|
           spec.dst.try { |dst| check_relative_path(dst, "#{field}.files[#{position}].dst") }
         end
+      end
+    end
+
+    # Symbolic links go in tar.gz only: refused here, not after the builds,
+    # for every format a platform of the build would be archived in. A
+    # skipped platform is never archived, so its format does not count.
+    private def check_archive_aliases(archive : Config::Archive, field : String) : Nil
+      archive.builds.each do |id|
+        build = @config.builds.find { |candidate| candidate.id == id }
+        next if build.nil? || build.aliases.empty?
+        formats = build.platforms.reject { |platform| skipped?(platform) }.flat_map do |platform|
+          archive.format_overrides.find { |override| override.os == platform.os }.try(&.formats) || archive.formats
+        end
+        @errors << "#{field}: aliases are only written to tar.gz (build #{build.id})" unless formats.all?("tar.gz")
       end
     end
 

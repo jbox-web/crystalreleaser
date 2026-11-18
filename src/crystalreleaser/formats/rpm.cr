@@ -202,7 +202,9 @@ module Crystalreleaser
         digest = Digest::SHA256.new
         cpio = Cpio::Writer.new(IO::MultiWriter.new(gzip, DigestWriter.new(digest)))
         items(spec).each do |item|
-          if source = item.src
+          if link = item.link
+            cpio.add_symlink(".#{item.dst}", link, spec.mtime)
+          elsif source = item.src
             cpio.add_file(".#{item.dst}", item.mode, spec.mtime, source)
           else
             cpio.add_directory(".#{item.dst}", item.mode, spec.mtime)
@@ -234,10 +236,19 @@ module Crystalreleaser
         PackageSpec::Kind::ConfigNoreplace => 1 | 16,
       }
 
-      # A file of the package (`src` set) or a directory it owns (`src` nil).
-      private record Item, dst : String, src : String?, mode : Int32, flags : Int32 = 0 do
+      # A file of the package (`src` set), a symbolic link (`link` set) or a
+      # directory it owns (neither).
+      private record Item, dst : String, src : String?, mode : Int32, flags : Int32 = 0, link : String? = nil do
+        # A symbolic link's size is the length of its target, as rpmbuild
+        # records it.
         def size : Int64
-          src.try { |path| File.size(path) } || 0_i64
+          link.try(&.bytesize.to_i64) || src.try { |path| File.size(path) } || 0_i64
+        end
+
+        # The full st_mode: file type bits, then the permissions.
+        def file_mode : Int16
+          type = link ? 0o120000 : (src ? 0o100000 : 0o040000)
+          (type | mode).to_i16!
         end
       end
 
@@ -245,7 +256,9 @@ module Crystalreleaser
       # path as rpm requires. Owning its directories is what lets `rpm -e`
       # remove them.
       private def self.items(spec : PackageSpec) : Array(Item)
-        files = spec.files.map { |file| Item.new(file.dst, file.src, file.mode, FILE_FLAGS[file.kind]) }
+        files = spec.files.map do |file|
+          Item.new(file.dst, file.symlink? ? nil : file.src, file.mode, FILE_FLAGS[file.kind], file.link)
+        end
         dirs = spec.owned_directories.map { |dir| Item.new(dir, nil, 0o755) }
         (files + dirs).sort_by!(&.dst)
       end
@@ -306,8 +319,6 @@ module Crystalreleaser
         dirnames = files.map { |file| File.dirname(file.dst).rchop('/') + "/" }.uniq!
         requires = RPMLIB_REQUIRES.map { |(name, ver)| {name, ver, SENSE_RPMLIB | SENSE_LESS | SENSE_EQUAL} } +
                    spec.dependencies.map { |dependency| parse_dependency(dependency) }
-        directory = 0o040000
-        regular = 0o100000
 
         entries = [
           Entry.new(Tag::HEADERI18NTABLE, Type::StringArray, ["C"]),
@@ -318,18 +329,21 @@ module Crystalreleaser
           Entry.new(Tag::DESCRIPTION, Type::I18nString, [spec.description.strip.presence || spec.summary]),
           Entry.new(Tag::BUILDTIME, Type::Int32, [time32(spec.mtime)]),
           Entry.new(Tag::BUILDHOST, Type::String, "crystalreleaser"),
-          Entry.new(Tag::SIZE, Type::Int32, [int32(spec.installed_size, "the package content")]),
+          # The sizes FILESIZES lists: rpmbuild counts a symbolic link by the
+          # length of its target, where the deb's Installed-Size counts it
+          # nothing.
+          Entry.new(Tag::SIZE, Type::Int32, [int32(files.sum(0_i64, &.size), "the package content")]),
           Entry.new(Tag::LICENSE, Type::String, spec.license.presence || "Unknown"),
           Entry.new(Tag::PACKAGER, Type::String, spec.maintainer),
           Entry.new(Tag::GROUP, Type::I18nString, ["Unspecified"]),
           Entry.new(Tag::OS, Type::String, "linux"),
           Entry.new(Tag::ARCH, Type::String, arch),
           Entry.new(Tag::FILESIZES, Type::Int32, files.map { |file| int32(file.size, file.dst) }),
-          Entry.new(Tag::FILEMODES, Type::Int16, files.map { |file| ((file.src ? regular : directory) | file.mode).to_i16! }),
+          Entry.new(Tag::FILEMODES, Type::Int16, files.map(&.file_mode)),
           Entry.new(Tag::FILERDEVS, Type::Int16, files.map { 0_i16 }),
           Entry.new(Tag::FILEMTIMES, Type::Int32, files.map { time32(spec.mtime) }),
           Entry.new(Tag::FILEDIGESTS, Type::StringArray, files.map { |file| file.src.try { |path| sha256_file(path) } || "" }),
-          Entry.new(Tag::FILELINKTOS, Type::StringArray, files.map { "" }),
+          Entry.new(Tag::FILELINKTOS, Type::StringArray, files.map { |file| file.link || "" }),
           Entry.new(Tag::FILEFLAGS, Type::Int32, files.map(&.flags)),
           Entry.new(Tag::FILEUSERNAME, Type::StringArray, files.map { "root" }),
           Entry.new(Tag::FILEGROUPNAME, Type::StringArray, files.map { "root" }),

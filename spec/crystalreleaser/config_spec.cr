@@ -212,6 +212,24 @@ describe Crystalreleaser::Config do
       end
     end
 
+    it "reads the aliases of a build, as empty by default" do
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n    aliases: [toy-manager, tm]\n") do |project|
+        load(project).builds.first.aliases.should eq(["toy-manager", "tm"])
+      end
+      Fixture.project(config: "builds:\n  - id: toy\n    target: toy\n") do |project|
+        load(project).builds.first.aliases.should eq([] of String)
+      end
+    end
+
+    # A file name in the folder the binary is installed in: the validator
+    # and the merge of split builds both ask the configuration.
+    it "tells an alias name from anything that is not a plain file name" do
+      %w[toy-manager Toy_2.x a ...].each { |name| Crystalreleaser::Config::Build.alias_name?(name).should be_true }
+      ["", ".", "..", "a b", "x/y", "../evil", "a,b", "a=b"].each do |name|
+        Crystalreleaser::Config::Build.alias_name?(name).should be_false
+      end
+    end
+
     # Up to 0.2.1 static_libs was a single mapping: say what to write instead
     # of YAML's "expected a sequence".
     it "refuses static_libs written as a single mapping, and says it is a list" do

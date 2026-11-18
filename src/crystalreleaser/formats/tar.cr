@@ -22,6 +22,13 @@ module Crystalreleaser
           write_header(name, mode, 0_i64, mtime, '5')
         end
 
+        # A symbolic link to `target`, which is stored as given (a relative
+        # name stays valid wherever the archive is extracted). Mode 0777 like
+        # GNU tar writes for a link; no data block follows.
+        def add_symlink(name : String, target : String, mtime : Time) : Nil
+          write_header(name, 0o777, 0_i64, mtime, '2', target)
+        end
+
         def add_file(name : String, mode : Int32, mtime : Time, content : Bytes) : Nil
           write_header(name, mode, content.size.to_i64, mtime, '0')
           @io.write(content)
@@ -46,7 +53,7 @@ module Crystalreleaser
           @io.write(Bytes.new(BLOCK - remainder)) unless remainder.zero?
         end
 
-        private def write_header(name : String, mode : Int32, size : Int64, mtime : Time, type : Char) : Nil
+        private def write_header(name : String, mode : Int32, size : Int64, mtime : Time, type : Char, link : String = "") : Nil
           prefix, short = Tar.split_name(name)
           raise FormatError.new("file too large for a ustar archive: #{name}") if size >= 8_i64 ** 11
           raise FormatError.new("a tar archive cannot hold a time before 1970: #{name}") if mtime.to_unix < 0
@@ -59,6 +66,7 @@ module Crystalreleaser
           put(header, 124, 12, Tar.octal(size, 11))
           put(header, 136, 12, Tar.octal(mtime.to_unix, 11))
           header[156] = type.ord.to_u8
+          put(header, 157, 100, link)
           put(header, 257, 6, "ustar")
           put(header, 263, 2, "00")
           put(header, 265, 32, "root")

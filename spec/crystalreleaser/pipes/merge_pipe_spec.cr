@@ -137,6 +137,55 @@ describe Crystalreleaser::Pipes::Merge do
     end
   end
 
+  it "registers the aliases a split build recorded on its binary" do
+    Fixture.project(config: CONFIG) do |project|
+      extra = JSON.parse(%({"target": "x86_64-linux-musl", "aliases": "toy-manager,tm"}))
+      ctx = split_build(project, {"extra" => extra})
+      Crystalreleaser::Pipes::Merge.new.run(ctx)
+      ctx.artifacts.all.first.extra["aliases"].should eq("toy-manager,tm")
+    end
+  end
+
+  # artifacts.json comes from another machine, and the aliases end up as
+  # member names in the archive.
+  it "refuses a recorded alias that is not an alias name" do
+    Fixture.project(config: CONFIG) do |project|
+      extra = JSON.parse(%({"target": "x86_64-linux-musl", "aliases": "ok,../evil"}))
+      ctx = split_build(project, {"extra" => extra})
+      merge_error(ctx).should eq(%(dist/linux_amd64: dist/linux_amd64/toy_linux_amd64/toy lists the alias "../evil", which is not an alias name))
+    end
+  end
+
+  # Each alias becomes one member of the archive and one name of the aqua
+  # entry: given twice, both would be written twice.
+  it "refuses a recorded alias given twice for a binary" do
+    Fixture.project(config: CONFIG) do |project|
+      extra = JSON.parse(%({"target": "x86_64-linux-musl", "aliases": "tm,tm"}))
+      ctx = split_build(project, {"extra" => extra})
+      merge_error(ctx).should eq(%(dist/linux_amd64: dist/linux_amd64/toy_linux_amd64/toy lists the alias "tm" twice))
+    end
+  end
+
+  # The default macOS file system ignores case: extracted there, TM would
+  # replace tm.
+  it "refuses two recorded aliases that differ only by case" do
+    Fixture.project(config: CONFIG) do |project|
+      extra = JSON.parse(%({"target": "x86_64-linux-musl", "aliases": "tm,TM"}))
+      ctx = split_build(project, {"extra" => extra})
+      merge_error(ctx).should eq(%(dist/linux_amd64: dist/linux_amd64/toy_linux_amd64/toy lists the alias "TM" twice))
+    end
+  end
+
+  # Extracted after the binary, such a link would replace it with a link to
+  # itself, on a case-insensitive file system too.
+  it "refuses a recorded alias that is the binary's own name, case ignored" do
+    Fixture.project(config: CONFIG) do |project|
+      extra = JSON.parse(%({"target": "x86_64-linux-musl", "aliases": "tm,Toy"}))
+      ctx = split_build(project, {"extra" => extra})
+      merge_error(ctx).should eq(%(dist/linux_amd64: dist/linux_amd64/toy_linux_amd64/toy lists the alias "Toy", which is the binary's own name))
+    end
+  end
+
   # The path check is on the text of the path: a link inside the folder may
   # lead anywhere, and chmod follows it.
   it "refuses a symbolic link, without touching what it points to" do

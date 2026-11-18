@@ -30,6 +30,13 @@ builds:
     # The shard.yml target: `main` is deduced from it.
     target: myapp
     binary: myapp
+    # Other names the binary is installed under: a symbolic link to it, next
+    # to it, in the tar.gz archives, the .deb and .rpm packages (in bindir)
+    # and the aqua entry. Only tar.gz holds a link, so every archive of the
+    # build must be one: commented out here because of the `bare` archive
+    # below. The Homebrew formula installs it with its own `install`:
+    # bin.install_symlink "myapp" => "myapp-ctl".
+    # aliases: [myapp-ctl]
     flags: [--release, --no-debug]
     # Read at compile time with `{{ env("MYAPP_VERSION") }}`: Crystal has no
     # -ldflags -X.

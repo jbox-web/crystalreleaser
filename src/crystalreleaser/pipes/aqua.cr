@@ -56,6 +56,13 @@ module Crystalreleaser
         first = archives.first
         wrap = first.extra["wrap"]?.presence.try { |dir| aqua_template(dir, version, first.os, first.arch) }
         binaries = (first.extra["binaries"]? || "").split(',').reject(&.empty?)
+        aliases = (first.extra["aliases"]? || "").split(',').reject(&.empty?).map(&.partition('='))
+        # Each alias is listed under its binary: one whose binary is not in
+        # the archive would be dropped from the entry without a word.
+        aliases.each do |(name, _, target)|
+          next if binaries.includes?(target)
+          raise PackageError.new("aqua: the alias #{name} points at #{target}, which is not a binary of #{first.name}")
+        end
         checksum = ctx.artifacts.filter(type: Artifact::Type::Checksum).first?
         owner, repo = repository(ctx)
 
@@ -78,6 +85,12 @@ module Crystalreleaser
           binaries.each do |binary|
             io << "      - name: " << scalar(binary) << "\n"
             io << "        src: " << scalar("#{wrap}/#{binary}") << "\n" if wrap
+            # A symbolic link in the archive: its src is the binary it names.
+            aliases.each do |(name, _, target)|
+              next unless target == binary
+              io << "      - name: " << scalar(name) << "\n"
+              io << "        src: " << scalar(wrap ? "#{wrap}/#{binary}" : binary) << "\n"
+            end
           end
           io << "    supported_envs:\n"
           supported_envs(archives).each { |env| io << "      - " << scalar(env) << "\n" }

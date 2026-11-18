@@ -35,6 +35,15 @@ module Crystalreleaser
           header(name, 0o040000 | (mode & 0o7777), @ino, 2, mtime.to_unix, 0_i64)
         end
 
+        # A symbolic link: mode 0120777, and the target as its data, as
+        # rpmbuild writes one in a payload.
+        def add_symlink(name : String, target : String, mtime : Time) : Nil
+          @ino += 1
+          header(name, 0o120777, @ino, 1, mtime.to_unix, target.bytesize.to_i64)
+          write(target.to_slice)
+          pad(target.bytesize.to_i64)
+        end
+
         def close : Nil
           header(TRAILER, 0, 0, 1, 0_i64, 0_i64)
         end

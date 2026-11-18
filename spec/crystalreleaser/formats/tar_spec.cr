@@ -41,6 +41,27 @@ describe Crystalreleaser::Formats::Tar do
     bytes[1536, 1024].all?(&.zero?).should be_true
   end
 
+  # ustar: typeflag at 156, linkname at 157 (100 bytes), size at 124, mode at
+  # 100; a symbolic link carries no data block.
+  it "writes a symbolic link: typeflag 2, the target in the link field, size 0, mode 0777" do
+    bytes = build_tar { |tar| tar.add_symlink("donico-manager", "donico", MTIME) }
+
+    # one header + two end blocks
+    bytes.size.should eq(512 * 3)
+    String.new(bytes[0, 14]).should eq("donico-manager")
+    bytes[156].chr.should eq('2')
+    String.new(bytes[157, 6]).should eq("donico")
+    bytes[163, 94].all?(&.zero?).should be_true
+    String.new(bytes[124, 12]).should eq("00000000000\0")
+    String.new(bytes[100, 8]).should eq("0000777\0")
+  end
+
+  it "refuses a symbolic link target that does not fit the 100 bytes of the link field" do
+    expect_raises(Crystalreleaser::FormatError, "tar field overflow") do
+      build_tar(&.add_symlink("l", "t" * 101, MTIME))
+    end
+  end
+
   it "reads back what it wrote" do
     bytes = build_tar do |tar|
       tar.add_directory("pkg", MTIME)

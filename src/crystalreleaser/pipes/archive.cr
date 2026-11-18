@@ -19,8 +19,9 @@ module Crystalreleaser
     # rendered name, for the projects whose users download one file and run
     # it. The `files:` have nowhere to go and are left out.
     class Archive < Pipe
-      # A file to put in an archive; `source` nil means a directory entry.
-      record Member, path : String, mode : Int32, source : String?
+      # A file to put in an archive; `source` nil means a directory entry,
+      # unless `link` is set: then it is a symbolic link to that target.
+      record Member, path : String, mode : Int32, source : String?, link : String? = nil
 
       def name : String
         "archive"
@@ -69,17 +70,30 @@ module Crystalreleaser
 
         path = ctx.dist_path(file_name)
         wrap = archive.wrap_in_directory? && !bare ? base : nil
+        # Symbolic links only exist in tar.gz; the validator has refused
+        # aliases for the other formats.
+        links = format == "tar.gz" ? alias_links(binaries) : [] of {String, String}
         if bare
           write_binary(ctx, index, path, binaries, os, arch)
         else
-          members = members(ctx, archive, index, binaries, wrap, file_name)
+          members = members(ctx, archive, index, binaries, links, wrap, file_name)
           format == "zip" ? write_zip(path, members, ctx.commit_time) : write_tar_gz(path, members, ctx.commit_time)
         end
 
         ctx.logger.info(file_name)
+        extra = {"format" => format, "binaries" => binaries.join(',', &.name), "wrap" => wrap || ""}
+        # `alias=binary` pairs, for the aqua pipe; absent without aliases.
+        extra["aliases"] = links.map { |(name, target)| "#{name}=#{target}" }.join(',') unless links.empty?
         ctx.artifacts.add(Artifact.new(Artifact::Type::Archive, file_name, ctx.relative(path),
-          os: os, arch: arch, size: File.size(path),
-          extra: {"format" => format, "binaries" => binaries.join(',', &.name), "wrap" => wrap || ""}))
+          os: os, arch: arch, size: File.size(path), extra: extra))
+      end
+
+      # {alias, binary} for every alias the builds of this platform declared,
+      # in the order they were written.
+      private def alias_links(binaries : Array(Artifact)) : Array({String, String})
+        binaries.flat_map do |binary|
+          (binary.extra["aliases"]? || "").split(',').reject(&.empty?).map { |name| {name, binary.name} }
+        end
       end
 
       # The `binary` format: a copy of the one binary of the platform.
@@ -102,15 +116,15 @@ module Crystalreleaser
         File.chmod(path, 0o755)
       end
 
-      # Files and binaries, sorted, each preceded by the directories that
-      # lead to it.
+      # Files, binaries and aliases, sorted, each preceded by the directories
+      # that lead to it.
       private def members(ctx : Context, archive : Config::Archive, index : Int32, binaries : Array(Artifact),
-                          wrap : String?, file_name : String) : Array(Member)
+                          links : Array({String, String}), wrap : String?, file_name : String) : Array(Member)
         files = {} of String => Member
         add = ->(member : Member) do
           if previous = files[member.path]?
             # Two globs matching the same file is not a conflict.
-            unless previous.source == member.source
+            unless previous.source == member.source && previous.link == member.link
               raise PackageError.new("archives[#{index}]: #{member.path} appears twice in #{file_name}")
             end
           end
@@ -119,6 +133,9 @@ module Crystalreleaser
 
         extra_files(ctx, archive, index).each { |member| add.call(member) }
         binaries.each { |binary| add.call(Member.new(binary.name, 0o755, File.join(ctx.dir, binary.path))) }
+        # Beside the binary, and relative to it: the link stays valid wherever
+        # the archive is extracted. 0777 is what a symbolic link has anyway.
+        links.each { |(name, target)| add.call(Member.new(name, 0o777, nil, target)) }
 
         result = [] of Member
         seen_dirs = Set(String).new
@@ -130,7 +147,7 @@ module Crystalreleaser
             result << Member.new(prefixed(wrap, "#{dir}/"), 0o755, nil) if seen_dirs.add?(dir)
           end
           member = files[relative]
-          result << Member.new(prefixed(wrap, relative), member.mode, member.source)
+          result << Member.new(prefixed(wrap, relative), member.mode, member.source, member.link)
         end
         result
       end
@@ -212,6 +229,8 @@ module Crystalreleaser
           members.each do |member|
             if source = member.source
               tar.add_file(member.path, member.mode, mtime, source)
+            elsif link = member.link
+              tar.add_symlink(member.path, link, mtime)
             else
               tar.add_directory(member.path, mtime, member.mode)
             end

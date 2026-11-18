@@ -60,6 +60,40 @@ describe Crystalreleaser::Formats::Cpio do
     end
   end
 
+  # newc stores a symbolic link as an entry of type 0120000 whose data is the
+  # target, its size the target's length: what rpmbuild writes in a payload.
+  it "writes a symbolic link: mode 0120777, the target as its data" do
+    io = IO::Memory.new
+    cpio = Crystalreleaser::Formats::Cpio::Writer.new(io)
+    cpio.add_symlink("./usr/bin/toy-manager", "toy", Time.unix(1_700_000_000))
+
+    # ino 1, mode 0120777 (a1ff), uid 0, gid 0, nlink 1, mtime 6553f100,
+    # size 3, four device numbers 0, name size 22 (16), check 0.
+    io.to_s.should eq(
+      "070701" \
+      "000000010000a1ff000000000000000000000001" \
+      "6553f10000000003" \
+      "00000000000000000000000000000000" \
+      "0000001600000000" \
+      "./usr/bin/toy-manager\0" \
+      "toy\0")
+    cpio.written.should eq(io.size)
+  end
+
+  it "lists a symbolic link with the system cpio as a link to its target" do
+    pending_tool!("cpio")
+    io = IO::Memory.new
+    cpio = Crystalreleaser::Formats::Cpio::Writer.new(io)
+    cpio.add_symlink("./usr/bin/toy-manager", "toy", Time.unix(1_700_000_000))
+    cpio.close
+    output = IO::Memory.new
+    Process.run("cpio", ["-itv"], input: IO::Memory.new(io.to_slice), output: output, error: Process::Redirect::Close)
+      .success?.should be_true
+    line = output.to_s.lines.first
+    line.should start_with("lrwxrwxrwx")
+    line.should end_with("./usr/bin/toy-manager -> toy")
+  end
+
   it "is listed by the system cpio" do
     pending_tool!("cpio")
     with_file("hello") do |path|

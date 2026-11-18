@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and leaves the packages unsigned.
 - A signature is dated at the commit, so that a release run again writes the
   same signed .rpm and resumes its draft.
+- `aliases` on a build: other names the binary is installed under, each a
+  symbolic link to it, next to it (`aliases: [donico-manager]` for a binary
+  `donico`). The link is written in the tar.gz archives, in the .deb and
+  .rpm packages (in `bindir`), and as a second `files` entry of the aqua
+  registry entry; `build --split` records the aliases with the binary, so
+  that `release --merge` writes them too. `check` refuses an alias that is
+  not a plain file name, that is the installed name of a build or another
+  alias, and a build with aliases archived as `zip` or `binary`, which
+  cannot hold a link. The Homebrew formula is the project's own `install`:
+  `bin.install_symlink "donico" => "donico-manager"`.
 
 ## [0.3.0] - 2026-11-18
 

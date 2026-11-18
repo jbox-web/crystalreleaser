@@ -106,6 +106,9 @@ module Crystalreleaser
       property main : String? = nil
       # Default: the target, else the id.
       property binary : String = ""
+      # Other names the binary is installed under, written as symbolic links
+      # to it next to it. Only tar.gz archives can hold them.
+      property aliases : Array(String) = [] of String
       property flags : Array(String) = ["--release"]
       property env : Array(String) = [] of String
       # Default: the host, built natively.
@@ -118,6 +121,15 @@ module Crystalreleaser
       property static_libs : Array(StaticLibs) = [] of StaticLibs
 
       def initialize(@id : String = "", @target : String? = nil)
+      end
+
+      # A second name of a binary: a file name in the folder it is installed
+      # in, written as a symbolic link next to it.
+      ALIAS_NAME = /\A[A-Za-z0-9._-]+\z/
+
+      # `.` and `..` match the pattern and name no file.
+      def self.alias_name?(name : String) : Bool
+        ALIAS_NAME.matches?(name) && !name.in?(".", "..")
       end
     end
 

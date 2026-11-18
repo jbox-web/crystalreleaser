@@ -10,9 +10,10 @@ require "../pipe"
 module Crystalreleaser
   module Pipes
     # .deb and .rpm packages of the Linux binaries, written natively (no
-    # nfpm, no dpkg-deb, no rpmbuild): the binaries go to `bindir`, the
-    # `contents` entries where they say. With `rpm.signature`, the .rpm
-    # packages are signed, by gpg, and the public key joins the artifacts.
+    # nfpm, no dpkg-deb, no rpmbuild): the binaries go to `bindir`, with
+    # their aliases as symbolic links beside them, the `contents` entries
+    # where they say. With `rpm.signature`, the .rpm packages are signed, by
+    # gpg, and the public key joins the artifacts.
     class Nfpm < Pipe
       def name : String
         "nfpm"
@@ -134,6 +135,11 @@ module Crystalreleaser
         binaries.each do |binary|
           spec.files << Formats::PackageSpec::File.new(File.join(nfpm.bindir, binary.name),
             File.join(ctx.dir, binary.path), 0o755)
+          # The aliases the build recorded on its binary, beside it in bindir:
+          # the target is the binary's bare name, valid wherever bindir is.
+          (binary.extra["aliases"]? || "").split(',').reject(&.empty?).each do |name|
+            spec.files << Formats::PackageSpec::File.symlink(File.join(nfpm.bindir, name), binary.name)
+          end
         end
         nfpm.contents.each_with_index do |content, position|
           source = File.expand_path(content.src, ctx.dir)

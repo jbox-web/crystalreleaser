@@ -10,7 +10,7 @@ module Crystalreleaser
   module Formats
     # A binary .deb: an ar archive of `debian-binary` (2.0), control.tar.gz
     # (control, md5sums, and conffiles when the package has configuration
-    # files) and data.tar.gz (the files, every parent
+    # files) and data.tar.gz (the files and symbolic links, every parent
     # directory listed explicitly, paths as ./usr/bin/...).
     module Deb
       ARCHES = {"amd64" => "amd64", "arm64" => "arm64"}
@@ -58,8 +58,9 @@ module Crystalreleaser
         ([spec.summary] + lines[1..].map { |line| line.strip.empty? ? " ." : " #{line.rstrip}" }).join('\n')
       end
 
+      # Regular files only: a symbolic link has no content of its own.
       def self.md5sums(spec : PackageSpec) : String
-        spec.files.join do |file|
+        spec.files.reject(&.symlink?).join do |file|
           digest = Digest::MD5.new
           digest.file(file.src)
           "#{digest.hexfinal}  #{file.dst.lchop('/')}\n"
@@ -86,7 +87,13 @@ module Crystalreleaser
         gzip_tar(spec.mtime) do |tar|
           tar.add_directory("./", spec.mtime)
           spec.directories.each { |dir| tar.add_directory(".#{dir}/", spec.mtime) }
-          spec.files.sort_by(&.dst).each { |file| tar.add_file(".#{file.dst}", file.mode, spec.mtime, file.src) }
+          spec.files.sort_by(&.dst).each do |file|
+            if link = file.link
+              tar.add_symlink(".#{file.dst}", link, spec.mtime)
+            else
+              tar.add_file(".#{file.dst}", file.mode, spec.mtime, file.src)
+            end
+          end
         end
       end
 

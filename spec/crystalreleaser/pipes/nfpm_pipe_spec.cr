@@ -40,6 +40,15 @@ private def signature_tags_of(package : Bytes) : Array(Int32)
   Crystalreleaser::Formats::Rpm.read(IO::Memory.new(package))[1].keys.select(&.in?(267, 268))
 end
 
+private def data_entries(path : String) : Array(Crystalreleaser::Formats::Tar::Entry)
+  data = File.open(path) { |file| Crystalreleaser::Formats::Ar.read(file) }.last
+  Compress::Gzip::Reader.open(IO::Memory.new(data.content)) { |gzip| Crystalreleaser::Formats::Tar.read(gzip) }
+end
+
+private def rpm_header(path : String)
+  File.open(path) { |file| Crystalreleaser::Formats::Rpm.read(file) }[2]
+end
+
 describe Crystalreleaser::Pipes::Nfpm do
   it "signs the .rpm packages with the key of the environment and adds the public key to the artifacts" do
     pending_tool!("gpg")
@@ -233,6 +242,54 @@ describe Crystalreleaser::Pipes::Nfpm do
       Crystalreleaser::Pipes::Nfpm.new.run(ctx)
       ctx.artifacts.filter(type: Crystalreleaser::Artifact::Type::PublicKey).map(&.name).should eq(["RPM-GPG-KEY-toy"])
       signature_tags(project.path("dist/other_amd64.rpm")).should eq([268])
+    end
+  end
+
+  it "installs each alias of a packaged build as a symbolic link to the binary, in bindir" do
+    Fixture.project(config: CONFIG.sub("formats: [deb]", "formats: [deb, rpm]")) do |project|
+      project.write("LICENSE", "MIT\n")
+      ctx = spec_context(project)
+      fake_binary(ctx, "linux", "amd64", aliases: ["toy-manager", "tm"])
+      Crystalreleaser::Pipes::Nfpm.new.run(ctx)
+
+      deb = project.path("dist/toy_1.2.3-rc.1_amd64.deb")
+      data_entries(deb).select(&.type.==('2')).map(&.name).should eq(["./usr/local/bin/tm", "./usr/local/bin/toy-manager"])
+      # ustar: typeflag at 156, linkname at 157.
+      data = project.path("data.tar.gz")
+      File.write(data, File.open(deb) { |file| Crystalreleaser::Formats::Ar.read(file) }.last.content)
+      {"./usr/local/bin/tm", "./usr/local/bin/toy-manager"}.each do |name|
+        header = tar_header(data, name)
+        header[156].chr.should eq('2')
+        String.new(header[157, 4]).should eq("toy\0")
+      end
+
+      header = rpm_header(project.path("dist/toy_1.2.3-rc.1_amd64.rpm"))
+      header[Crystalreleaser::Formats::Rpm::Tag::BASENAMES].should eq(["tm", "toy", "toy-manager", "toy", "LICENSE"])
+      header[Crystalreleaser::Formats::Rpm::Tag::FILELINKTOS].should eq(["toy", "", "toy", "", ""])
+    end
+  end
+
+  it "writes no symbolic link for a build without aliases" do
+    Fixture.project(config: CONFIG.sub("formats: [deb]", "formats: [deb, rpm]")) do |project|
+      project.write("LICENSE", "MIT\n")
+      ctx = spec_context(project)
+      fake_binary(ctx, "linux", "amd64")
+      Crystalreleaser::Pipes::Nfpm.new.run(ctx)
+
+      data_entries(project.path("dist/toy_1.2.3-rc.1_amd64.deb")).map(&.type).uniq!.sort!.should eq(['0', '5'])
+      header = rpm_header(project.path("dist/toy_1.2.3-rc.1_amd64.rpm"))
+      header[Crystalreleaser::Formats::Rpm::Tag::FILELINKTOS].should eq(["", "", ""])
+    end
+  end
+
+  it "refuses an alias installed over a content" do
+    Fixture.project(config: CONFIG.sub("/usr/share/doc/toy/LICENSE", "/usr/local/bin/toy-manager")) do |project|
+      project.write("LICENSE", "MIT\n")
+      ctx = spec_context(project)
+      fake_binary(ctx, "linux", "amd64", aliases: ["toy-manager"])
+      expect_raises(Crystalreleaser::PackageError, "nfpms[0]: /usr/local/bin/toy-manager is installed twice") do
+        Crystalreleaser::Pipes::Nfpm.new.run(ctx)
+      end
     end
   end
 

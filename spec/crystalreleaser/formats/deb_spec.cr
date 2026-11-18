@@ -12,6 +12,20 @@ private def with_deb(& : String, Crystalreleaser::Formats::PackageSpec ->) : Nil
   end
 end
 
+# The sample package plus /usr/bin/toy-manager, a symbolic link to toy.
+private def with_linked_deb(& : String, String ->) : Nil
+  dir = File.join(Dir.tempdir, "crystalreleaser-deb-#{Random::Secure.hex(6)}")
+  begin
+    spec = sample_package(dir)
+    spec.files << Crystalreleaser::Formats::PackageSpec::File.symlink("/usr/bin/toy-manager", "toy")
+    path = File.join(dir, "toy.deb")
+    File.open(path, "w") { |file| Crystalreleaser::Formats::Deb.write(file, spec) }
+    yield path, dir
+  ensure
+    FileUtils.rm_rf(dir)
+  end
+end
+
 private def members(path : String) : Array(Crystalreleaser::Formats::Ar::Member)
   File.open(path) { |file| Crystalreleaser::Formats::Ar.read(file) }
 end
@@ -21,6 +35,15 @@ private def untar(bytes : Bytes) : Array(Crystalreleaser::Formats::Tar::Entry)
 end
 
 describe Crystalreleaser::Formats::Deb do
+  # A package without symbolic link is the one the release before aliases
+  # wrote. The digest comes from release 0.3.0 (commit 6c86ed4, 2026-11-18):
+  # its own Deb.write, run on this same sample_package.
+  it "writes, without symbolic link, the bytes release 0.3.0 wrote" do
+    with_deb do |path|
+      Digest::SHA256.hexdigest(File.read(path)).should eq("54b5f21a6a4080c20a5f477742293d3b94934db8c61edf5e36527786fa5cadf9")
+    end
+  end
+
   it "holds debian-binary, control.tar.gz and data.tar.gz, in that order" do
     with_deb do |path|
       list = members(path)
@@ -151,6 +174,64 @@ describe Crystalreleaser::Formats::Deb do
         {"./usr/bin/toy", 0o755, "root"},
         {"./usr/share/doc/toy/LICENSE", 0o644, "root"},
       ])
+    end
+  end
+
+  # ustar: typeflag at 156, linkname at 157, size at 124, mode at 100 of the
+  # header block, read from the bytes data.tar.gz holds.
+  it "puts a symbolic link in data.tar.gz, its target relative, in the same directory" do
+    with_linked_deb do |path, dir|
+      data = File.join(dir, "data.tar.gz")
+      File.write(data, members(path)[2].content)
+      header = tar_header(data, "./usr/bin/toy-manager")
+      header[156].chr.should eq('2')
+      String.new(header[157, 3]).should eq("toy")
+      header[160, 97].all?(&.zero?).should be_true
+      String.new(header[124, 12]).should eq("00000000000\0")
+      String.new(header[100, 8]).should eq("0000777\0")
+      untar(members(path)[2].content).map(&.name).should eq([
+        "./", "./usr/", "./usr/bin/", "./usr/share/", "./usr/share/doc/", "./usr/share/doc/toy/",
+        "./usr/bin/toy", "./usr/bin/toy-manager", "./usr/share/doc/toy/LICENSE",
+      ])
+    end
+  end
+
+  # md5sums lists the content of regular files; a link has none, and dpkg
+  # checks it against its target.
+  it "gives the symbolic link no md5sums line" do
+    with_linked_deb do |path|
+      control = untar(members(path)[1].content)
+      String.new(control.find!(&.name.==("./md5sums")).content).should eq(
+        "5d03ed0711b2626a4c3dfb5dbe151c9d  usr/bin/toy\n" \
+        "477dfa54ede28e2f361e7db05941d7a7  usr/share/doc/toy/LICENSE\n")
+    end
+  end
+
+  # Installed-Size is the KiB the regular files take, rounded up. The two
+  # files total exactly 1024 bytes: 1 KiB. A link adds nothing; counted,
+  # even for the 3 bytes of its target, it would make 2.
+  it "gives the symbolic link no Installed-Size" do
+    dir = File.join(Dir.tempdir, "crystalreleaser-deb-#{Random::Secure.hex(6)}")
+    begin
+      spec = sample_package(dir)
+      File.write(File.join(dir, "toy"), "x" * 1000)
+      File.write(File.join(dir, "LICENSE"), "y" * 24)
+      spec.files << Crystalreleaser::Formats::PackageSpec::File.symlink("/usr/bin/toy-manager", "toy")
+      path = File.join(dir, "toy.deb")
+      File.open(path, "w") { |file| Crystalreleaser::Formats::Deb.write(file, spec) }
+      control = untar(members(path)[1].content)
+      String.new(control.find!(&.name.==("./control")).content).should contain("Installed-Size: 1\n")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  it "has its symbolic link listed by dpkg-deb" do
+    pending_tool!("dpkg-deb")
+    with_linked_deb do |path|
+      line = run_tool(["dpkg-deb", "--contents", path]).lines.find!(&.includes?("./usr/bin/toy-manager"))
+      line.should start_with("lrwxrwxrwx root/root")
+      line.should end_with("./usr/bin/toy-manager -> toy")
     end
   end
 

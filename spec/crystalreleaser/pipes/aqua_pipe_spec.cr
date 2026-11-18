@@ -226,6 +226,62 @@ describe Crystalreleaser::Pipes::Aqua do
     end
   end
 
+  it "lists each alias after the binary, pointing at the binary in the archive" do
+    Fixture.project(config: CONFIG) do |project|
+      ctx = aqua_context(project, ALL)
+      ctx.artifacts.all.select(&.type.archive?).each { |archive| archive.extra["aliases"] = "toy-manager=toy" }
+      Crystalreleaser::Pipes::Aqua.new.run(ctx)
+
+      YAML.parse(File.read(project.path("dist/aqua/registry.yaml")))["packages"][0]["files"]
+        .should eq(YAML.parse("[{name: toy}, {name: toy-manager, src: toy}]"))
+    end
+  end
+
+  it "points the alias inside the wrapping directory as the binary" do
+    Fixture.project(config: CONFIG) do |project|
+      ctx = aqua_context(project, ALL, wrap: true)
+      ctx.artifacts.all.select(&.type.archive?).each { |archive| archive.extra["aliases"] = "toy-manager=toy,tm=toy" }
+      Crystalreleaser::Pipes::Aqua.new.run(ctx)
+
+      YAML.parse(File.read(project.path("dist/aqua/registry.yaml")))["packages"][0]["files"].should eq(YAML.parse(<<-YAML))
+        - name: toy
+          src: "toy_{{trimV .Version}}_{{.OS}}_{{.Arch}}/toy"
+        - name: toy-manager
+          src: "toy_{{trimV .Version}}_{{.OS}}_{{.Arch}}/toy"
+        - name: tm
+          src: "toy_{{trimV .Version}}_{{.OS}}_{{.Arch}}/toy"
+        YAML
+    end
+  end
+
+  # The archive pipe writes the pairs and the aqua pipe reads them: run both,
+  # so that neither side's format is only pinned by hand.
+  it "lists the aliases the archive pipe recorded, from a real run of it" do
+    Fixture.project(config: CONFIG + "\narchives:\n  - id: default\n    files: []\n") do |project|
+      ctx = spec_context(project, env: {"AQUA_REGISTRY_TOKEN" => "aqua-secret"})
+      fake_binary(ctx, "linux", "amd64", aliases: ["toy-manager", "tm"])
+      fake_binary(ctx, "darwin", "arm64", aliases: ["toy-manager", "tm"])
+      Crystalreleaser::Pipes::Archive.new.run(ctx)
+      Crystalreleaser::Pipes::Aqua.new.run(ctx)
+
+      YAML.parse(File.read(project.path("dist/aqua/registry.yaml")))["packages"][0]["files"]
+        .should eq(YAML.parse("[{name: toy}, {name: toy-manager, src: toy}, {name: tm, src: toy}]"))
+    end
+  end
+
+  # The archive holds the link, but the entry would install a name pointing
+  # at nothing aqua extracts.
+  it "refuses an alias whose binary is not in the archive" do
+    Fixture.project(config: CONFIG) do |project|
+      ctx = aqua_context(project, ALL)
+      ctx.artifacts.all.select(&.type.archive?).each { |archive| archive.extra["aliases"] = "toy-manager=toy,tm=other" }
+      expect_raises(Crystalreleaser::PackageError,
+        "aqua: the alias tm points at other, which is not a binary of toy_1.2.3-rc.1_linux_amd64.tar.gz") do
+        Crystalreleaser::Pipes::Aqua.new.run(ctx)
+      end
+    end
+  end
+
   it "pushes the registry entry when publishing" do
     Fixture.project(config: CONFIG) do |project|
       options = Crystalreleaser::Options.new

@@ -16,8 +16,20 @@ module Crystalreleaser
         end
       end
 
-      # An installed file: absolute destination, source on disk, mode.
-      record File, dst : String, src : String, mode : Int32, kind : Kind = Kind::Regular
+      # An installed file: absolute destination, source on disk, mode. With
+      # `link` set, a symbolic link to that target instead, with no source.
+      record File, dst : String, src : String, mode : Int32, kind : Kind = Kind::Regular, link : String? = nil do
+        # A symbolic link to `target`, stored as given: a bare name points at
+        # a file of the same directory wherever the package installs it.
+        # 0777, the mode of every symbolic link.
+        def self.symlink(dst : String, target : String) : File
+          new(dst, "", 0o777, Kind::Regular, target)
+        end
+
+        def symlink? : Bool
+          !link.nil?
+        end
+      end
 
       property name : String
       # The upstream version, semver: 1.2.3-rc.1.
@@ -74,8 +86,10 @@ module Crystalreleaser
         {match[1], operator, match[3]}
       end
 
+      # The deb's Installed-Size: a symbolic link adds nothing, it has no
+      # source to measure. rpm's SIZE counts it otherwise (Rpm.write).
       def installed_size : Int64
-        files.sum(0_i64) { |file| ::File.size(file.src) }
+        files.reject(&.symlink?).sum(0_i64) { |file| ::File.size(file.src) }
       end
 
       # Every directory leading to the files, shortest first, without "/".

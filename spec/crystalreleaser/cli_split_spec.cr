@@ -2,13 +2,14 @@ require "../spec_helper"
 
 # The host builds natively; the config also lists a platform no host here
 # can build (freebsd), which split mode must leave to another runner.
-private def split_toy(& : Fixture::Project ->) : Nil
+private def split_toy(aliases : String = "", & : Fixture::Project ->) : Nil
   host = Crystalreleaser::Host.current
   config = <<-YAML
     builds:
       - id: toy
         target: toy
         flags: []
+    #{aliases}
         platforms:
           - os: #{host.os}
             arch: #{host.arch}
@@ -48,6 +49,95 @@ describe "build --split and release --merge" do
         .should eq([Digest::SHA256.hexdigest(File.read(project.path("dist/#{platform_dir}/toy_#{platform_dir}/toy")))])
       JSON.parse(File.read(project.path("dist/#{platform_dir}/metadata.json")))["commit"]
         .should eq(project.git("rev-parse", "HEAD"))
+    end
+  end
+
+  # The aliases of a build travel in the extra of its binary, with the target
+  # triple: the machine that merges needs nothing else to write them.
+  it "carries the aliases of a build through the split into the archive of the merge" do
+    split_toy("    aliases: [toy-manager]") do |project|
+      split = run_cli_in(project.dir, "build", "--split")
+      split.code.should eq(0), split.stderr
+      artifacts = JSON.parse(File.read(project.path("dist/#{platform_dir}/artifacts.json"))).as_a
+      artifacts.map(&.["extra"]["aliases"].as_s).should eq(["toy-manager"])
+
+      merged = run_cli_in(project.dir, "release", "--merge", "--allow-missing", "--skip=publish")
+      merged.code.should eq(0), merged.stderr
+      entries = read_tar_gz(project.path("dist/toy_1.0.0_#{platform_dir}.tar.gz"))
+      entries.map { |entry| {entry.name, entry.type} }.select { |(name, _)| name.starts_with?("toy") }
+        .should eq([{"toy", '0'}, {"toy-manager", '2'}])
+    end
+  end
+
+  # Two linux runners, whose share is written by hand as `build --split`
+  # leaves it (no docker here): the merge has only artifacts.json to learn
+  # the aliases from, and must write them in every format.
+  it "writes the aliases of a merged release of two split builds in the archives, packages and aqua entry" do
+    config = <<-YAML
+      builds:
+        - id: toy
+          target: toy
+          aliases: [toy-manager]
+          platforms:
+            - { os: linux, arch: amd64, strategy: docker, static: true }
+            - { os: linux, arch: arm64, strategy: docker, static: true }
+      archives:
+        - id: default
+          files: []
+      nfpms:
+        - id: packages
+          formats: [deb, rpm]
+          maintainer: Jane Doe <jane@example.com>
+          bindir: /usr/bin
+      release:
+        github: { owner: jbox-web, name: toy }
+      aqua:
+        - repository: { owner: jbox-web, name: aqua-registry, branch: main }
+          path: pkgs/jbox-web/toy/registry.yaml
+      YAML
+    Fixture.project(config: config) do |project|
+      project.write(".gitignore", "/dist/\n")
+      project.init_git
+      project.commit("feat: first")
+      project.tag("v1.0.0")
+      commit = project.git("rev-parse", "HEAD")
+      {"amd64", "arm64"}.each do |arch|
+        folder = "dist/linux_#{arch}"
+        binary = project.path("#{folder}/toy_linux_#{arch}/toy")
+        project.write("#{folder}/toy_linux_#{arch}/toy", "toy for linux/#{arch}")
+        File.write(project.path("#{folder}/artifacts.json"), [{
+          "type" => "binary", "name" => "toy", "path" => "#{folder}/toy_linux_#{arch}/toy", "os" => "linux",
+          "arch" => arch, "build_id" => "toy", "size" => 19,
+          "extra" => {"target" => Crystalreleaser::Builders.triple("linux", arch, true), "aliases" => "toy-manager"},
+          "sha256" => Digest::SHA256.hexdigest(File.read(binary)),
+        }].to_json)
+        File.write(project.path("#{folder}/metadata.json"),
+          {version: "1.0.0", tag: "v1.0.0", commit: commit, os: "linux", arch: arch}.to_json)
+      end
+
+      merged = run_cli_in(project.dir, "release", "--merge", "--skip=publish")
+      merged.code.should eq(0), merged.stderr
+
+      {"amd64", "arm64"}.each do |arch|
+        read_tar_gz(project.path("dist/toy_1.0.0_linux_#{arch}.tar.gz")).map { |entry| {entry.name, entry.type} }
+          .should eq([{"toy", '0'}, {"toy-manager", '2'}])
+        deb = File.open(project.path("dist/toy_1.0.0_#{arch}.deb")) { |file| Crystalreleaser::Formats::Ar.read(file) }.last
+        Compress::Gzip::Reader.open(IO::Memory.new(deb.content)) { |gzip| Crystalreleaser::Formats::Tar.read(gzip) }
+          .select(&.type.==('2')).map(&.name).should eq(["./usr/bin/toy-manager"])
+        header = File.open(project.path("dist/toy_1.0.0_#{arch}.rpm")) { |file| Crystalreleaser::Formats::Rpm.read(file) }[2]
+        header[Crystalreleaser::Formats::Rpm::Tag::BASENAMES].should eq(["toy", "toy-manager"])
+        header[Crystalreleaser::Formats::Rpm::Tag::FILELINKTOS].should eq(["", "toy"])
+      end
+      YAML.parse(File.read(project.path("dist/aqua/registry.yaml")))["packages"][0]["files"]
+        .should eq(YAML.parse("[{name: toy}, {name: toy-manager, src: toy}]"))
+    end
+  end
+
+  it "records no aliases on the binary of a build without any" do
+    split_toy do |project|
+      run_cli_in(project.dir, "build", "--split").code.should eq(0)
+      artifacts = JSON.parse(File.read(project.path("dist/#{platform_dir}/artifacts.json"))).as_a
+      artifacts.map(&.["extra"].as_h.has_key?("aliases")).should eq([false])
     end
   end
 

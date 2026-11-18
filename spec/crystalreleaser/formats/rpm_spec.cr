@@ -15,6 +15,20 @@ private def with_rpm(& : String, Crystalreleaser::Formats::PackageSpec ->) : Nil
   end
 end
 
+# The sample package plus /usr/bin/toy-manager, a symbolic link to toy.
+private def with_linked_rpm(& : String ->) : Nil
+  dir = File.join(Dir.tempdir, "crystalreleaser-rpm-#{Random::Secure.hex(6)}")
+  begin
+    spec = sample_package(dir)
+    spec.files << Crystalreleaser::Formats::PackageSpec::File.symlink("/usr/bin/toy-manager", "toy")
+    path = File.join(dir, "toy.rpm")
+    File.open(path, "w") { |file| Rpm.write(file, spec) }
+    yield path
+  ensure
+    FileUtils.rm_rf(dir)
+  end
+end
+
 private def parts(path : String)
   File.open(path) { |file| Rpm.read(file) }
 end
@@ -50,6 +64,15 @@ private def with_signed_rpm(name : String, passphrase : String = "", & : String 
 end
 
 describe Crystalreleaser::Formats::Rpm do
+  # A package without symbolic link is the one the release before aliases
+  # wrote. The digest comes from release 0.3.0 (commit 6c86ed4, 2026-11-18):
+  # its own Rpm.write, run on this same sample_package.
+  it "writes, without symbolic link, the bytes release 0.3.0 wrote" do
+    with_rpm do |path|
+      Digest::SHA256.hexdigest(File.read(path)).should eq("ab6ebfc43d8155a719b29ccc9ab24dc73119fe2c4dbb412363df4f4357c628ea")
+    end
+  end
+
   it "starts with a 96-byte v3 lead naming the package" do
     with_rpm do |path|
       lead = parts(path)[0]
@@ -184,6 +207,53 @@ describe Crystalreleaser::Formats::Rpm do
       entries = Compress::Gzip::Reader.open(IO::Memory.new(payload)) { |gzip| Crystalreleaser::Formats::Cpio.read(gzip) }
       entries.map { |entry| {entry.name, entry.mode} }
         .should eq([{"./usr/bin/toy", 0o100755}, {"./usr/share/doc/toy", 0o040755}, {"./usr/share/doc/toy/LICENSE", 0o100644}])
+    end
+  end
+
+  # The values of a package rpmbuild wrote in rockylinux:9 for a link to
+  # `tool`: mode=120777 size=4 linkto=tool digest= (empty). Here the link
+  # points at `toy`, three bytes.
+  it "describes a symbolic link as rpmbuild does: mode 0120777, its target, the target's length, no digest" do
+    with_linked_rpm do |path|
+      header = parts(path)[2]
+      header[Tag::BASENAMES].should eq(["toy", "toy-manager", "toy", "LICENSE"])
+      header[Tag::FILEMODES].should eq([0o100755.to_i16!, 0o120777.to_i16!, 0o040755.to_i16!, 0o100644.to_i16!])
+      header[Tag::FILELINKTOS].should eq(["", "toy", "", ""])
+      header[Tag::FILESIZES].should eq([19, 3, 0, 4])
+      header[Tag::FILEDIGESTS].should eq([
+        "e2f4e996519178770f794b78aba73fddac826493dc40d36d10690bc66e4f7216",
+        "",
+        "",
+        "adc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2",
+      ])
+    end
+  end
+
+  # rpmbuild counts a link in SIZE by the length of its target: a 10-byte
+  # file and a link to `tool` gave SIZE 14 (rockylinux:9, 2026-11-18). Here
+  # 19 + 4 bytes of files and a link to `toy`, 3 bytes.
+  it "counts the length of a symbolic link's target in the package size, as rpmbuild does" do
+    with_linked_rpm do |path|
+      parts(path)[2][Tag::SIZE].should eq([26])
+    end
+  end
+
+  it "carries the symbolic link in the payload with its target as data" do
+    with_linked_rpm do |path|
+      payload = parts(path)[4]
+      entries = Compress::Gzip::Reader.open(IO::Memory.new(payload)) { |gzip| Crystalreleaser::Formats::Cpio.read(gzip) }
+      link = entries.find!(&.name.==("./usr/bin/toy-manager"))
+      {link.mode, String.new(link.content)}.should eq({0o120777, "toy"})
+    end
+  end
+
+  # --dump: path size mtime digest mode owner group isconfig isdoc rdev symlink.
+  it "has its symbolic link dumped by rpm" do
+    pending_tool!("rpm")
+    with_linked_rpm do |path|
+      fields = run_tool(["rpm", "-qp", "--dump", path]).lines.find!(&.starts_with?("/usr/bin/toy-manager ")).split(' ')
+      {fields[0], fields[1], fields[4], fields.last}.should eq({"/usr/bin/toy-manager", "3", "0120777", "toy"})
+      run_tool(["rpm", "-K", "--nosignature", path]).should contain("digests OK")
     end
   end
 
