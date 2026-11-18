@@ -22,6 +22,14 @@ describe Crystalreleaser::Licenses do
     Crystalreleaser::Licenses::FILES["clib-Apache-2.0.txt"].should start_with("Used by: openssl, crystal\n")
   end
 
+  # The GCC Runtime Library Exception 3.1 is an additional permission of the
+  # GPLv3: libgcc is GPL-3.0-or-later WITH that exception, never GPL-2.0.
+  it "names the license the GCC runtime exception applies to" do
+    notice = Crystalreleaser::Licenses::FILES["clib-GCC-runtime-exception.txt"]
+    notice.should contain("libgcc is distributed under GPL-3.0-or-later WITH the following exception")
+    notice.should_not contain("GPL-2.0")
+  end
+
   # MIT, BSD and zlib all require the copyright notice to be reproduced: the
   # notice of the library, not the blank of a license template.
   it "carries the copyright notice of each library, as its authors wrote it" do
